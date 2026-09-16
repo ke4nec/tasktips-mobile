@@ -32,6 +32,24 @@ class AppModel extends ChangeNotifier {
   DateTime _lastTodayRefresh = DateTime.now();
   String _today = '';
 
+  /// classification/index 的本地内容版本号：任何变更（本地写入或同步落盘）+1。
+  /// SyncEngine 用它跳过未变更内容的重复序列化+哈希。
+  int classificationVersion = 0;
+  int indexVersion = 0;
+
+  // 派生数据缓存：notifyListeners 时统一失效
+  Map<String, Todo>? _byIdCache;
+  Map<String, int>? _countByCategory;
+  Map<String, Set<String>>? _subtreeCache;
+
+  @override
+  void notifyListeners() {
+    _byIdCache = null;
+    _countByCategory = null;
+    _subtreeCache = null;
+    super.notifyListeners();
+  }
+
   AppModel(this.store);
 
   String get today {
@@ -52,13 +70,19 @@ class AppModel extends ChangeNotifier {
 
   Future<void> load() async {
     await store.init();
-    deviceId = await store.loadOrCreateDeviceId();
-    final scan = await store.scanTodos();
+    // 四路加载互不依赖，并行执行缩短启动关键路径
+    final deviceIdF = store.loadOrCreateDeviceId();
+    final scanF = store.scanTodos();
+    final classificationF = store.loadClassification();
+    final indexF = store.loadIndex();
+    final settingsF = store.loadSettings();
+    deviceId = await deviceIdF;
+    final scan = await scanF;
     todos = scan.todos;
     corrupt = scan.corrupt;
-    classification = await store.loadClassification();
-    index = await store.loadIndex();
-    final s = await store.loadSettings();
+    classification = await classificationF;
+    index = await indexF;
+    final s = await settingsF;
     themeMode = ThemeModeSetting.values
         .firstWhere((m) => m.name == s['theme'], orElse: () => ThemeModeSetting.system);
     onboardingDone = s['onboardingDone'] == true;
@@ -100,12 +124,7 @@ class AppModel extends ChangeNotifier {
 
   // ---------- Todo 用例 ----------
 
-  Todo? byId(String id) {
-    for (final t in todos) {
-      if (t.id == id) return t;
-    }
-    return null;
-  }
+  Todo? byId(String id) => (_byIdCache ??= {for (final t in todos) t.id: t})[id];
 
   /// 新建；fromToday 预填今天截止，category/tag 继承来源页。
   Future<Todo> createTodo({LocalDate? dueDate, String? categoryId, String? tagName}) async {
@@ -169,6 +188,7 @@ class AppModel extends ChangeNotifier {
     if (t == null) return;
     final ts = Tombstone(id, 'todo', DateTime.now().toUtc(), t.revision, deviceId);
     index.tombstones.add(ts);
+    indexVersion++;
     await store.saveIndex(index); // 墓碑先落盘
     await store.deleteTodoFile(id);
     todos.removeWhere((e) => e.id == id);
@@ -206,11 +226,13 @@ class AppModel extends ChangeNotifier {
       final ts =
           Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId);
       index.tombstones.add(ts);
-      await store.saveIndex(index);
+      indexVersion++;
       await store.deleteTodoFile(t.id);
       todos.remove(t);
       changed = true;
     }
+    // index.json 只在批量墓碑写完后落盘一次，避免逐条全量重写
+    if (expiredTodos.isNotEmpty) await store.saveIndex(index);
     final expiredCats = classification.categories
         .where((c) => c.isDeleted && c.deletedAt!.isBefore(cutoff))
         .toList();
@@ -259,6 +281,7 @@ class AppModel extends ChangeNotifier {
 
   Future<void> _saveClassification() async {
     await store.saveClassification(classification);
+    classificationVersion++;
     notifyListeners();
   }
 
@@ -349,6 +372,7 @@ class AppModel extends ChangeNotifier {
     classification.categories.removeWhere((c) => c.id == id);
     index.tombstones
         .add(Tombstone(id, 'category', DateTime.now().toUtc(), 1, deviceId));
+    indexVersion++;
     await store.saveIndex(index);
     await _saveClassification();
   }
@@ -428,6 +452,7 @@ class AppModel extends ChangeNotifier {
     }
     index.tombstones
         .add(Tombstone(id, 'tag', DateTime.now().toUtc(), 1, deviceId));
+    indexVersion++;
     await store.saveIndex(index);
     await _saveClassification();
   }
@@ -456,9 +481,26 @@ class AppModel extends ChangeNotifier {
         ..sort((a, b) => a.name.compareTo(b.name));
 
   int todoCountInCategory(String categoryId) {
-    final ids = expandCategoryIds(categoryId);
-    return todos
-        .where((t) => !t.isDeleted && t.categoryId != null && ids.contains(t.categoryId))
-        .length;
+    // 计数与子树展开均缓存；notifyListeners 时失效。
+    // 一次遍历统计所有目录的精确计数，避免 目录数 × 全量 todos 扫描。
+    _countByCategory ??= _buildCounts();
+    final subtree = _subtreeCache ??= {};
+    final ids =
+        subtree.putIfAbsent(categoryId, () => expandCategoryIds(categoryId));
+    final counts = _countByCategory!;
+    var n = 0;
+    for (final id in ids) {
+      n += counts[id] ?? 0;
+    }
+    return n;
+  }
+
+  Map<String, int> _buildCounts() {
+    final counts = <String, int>{};
+    for (final t in todos) {
+      if (t.isDeleted || t.categoryId == null) continue;
+      counts[t.categoryId!] = (counts[t.categoryId!] ?? 0) + 1;
+    }
+    return counts;
   }
 }

@@ -68,9 +68,11 @@ bool _matchesView(Todo t, TodoView view, String today) {
   }
 }
 
-String _stripToPlainText(String md) => md
-    .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
-    .replaceAll(RegExp(r'[#*_`~>\[\]()!|-]'), ' ');
+final _codeBlockRe = RegExp(r'```[\s\S]*?```');
+final _markerRe = RegExp(r'[#*_`~>\[\]()!|-]');
+
+String _stripToPlainText(String md) =>
+    md.replaceAll(_codeBlockRe, ' ').replaceAll(_markerRe, ' ');
 
 /// 过滤 + 排序。today 由调用方传入以便测试跨日场景。
 List<Todo> runQuery(

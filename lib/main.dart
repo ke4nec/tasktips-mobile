@@ -77,7 +77,7 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
         });
       }
       // 自动同步开启时注册 WorkManager 15 分钟周期任务（系统调度）
-      await Workmanager().initialize(callbackDispatcher, isInDebugMode: true);
+      await Workmanager().initialize(callbackDispatcher);
       if (sync.state.autoSync) {
         await Workmanager().registerPeriodicTask(
           'tasktips-sync', 'tasktipsPeriodicSync',
@@ -97,7 +97,12 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
       return model;
     }();
     _share.start();
-    // 前台每 60 秒检查
+    _startAutoSyncTimer();
+  }
+
+  /// 前台每 60 秒检查；后台暂停（Timer 不感知生命周期，避免后台空转请求）。
+  void _startAutoSyncTimer() {
+    _autoSyncTimer?.cancel();
     _autoSyncTimer = Timer.periodic(const Duration(seconds: 60), (_) {
       final s = _sync;
       if (s != null && s.state.autoSync) {
@@ -129,12 +134,17 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final s = _sync;
-    if (s == null) return;
     if (state == AppLifecycleState.resumed) {
+      _startAutoSyncTimer();
+      if (s == null) return;
       // 恢复前台触发自动同步
       if (s.state.autoSync) {
         Future.microtask(() => s.syncNow());
       }
+    } else if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused) {
+      _autoSyncTimer?.cancel();
+      _autoSyncTimer = null;
     }
   }
 

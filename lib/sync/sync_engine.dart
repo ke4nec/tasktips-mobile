@@ -4,7 +4,6 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -218,16 +217,38 @@ class SyncEngine extends ChangeNotifier {
 
   // ---------- 对象序列化与哈希 ----------
 
-  Uint8List todoBytes(Todo t) =>
-      Uint8List.fromList(utf8.encode(serializeTodoDoc(t)));
+  Uint8List todoBytes(Todo t) => utf8.encode(serializeTodoDoc(t));
 
-  Uint8List classificationBytes() => Uint8List.fromList(
-      utf8.encode(model.store.classificationJson(model.classification)));
+  Uint8List classificationBytes() =>
+      utf8.encode(model.store.classificationJson(model.classification));
 
   Uint8List indexBytes() =>
-      Uint8List.fromList(utf8.encode(model.store.indexJson(model.index)));
+      utf8.encode(model.store.indexJson(model.index));
 
   String sha256Of(List<int> bytes) => crypto.sha256.convert(bytes).toString();
+
+  // classification/index 的哈希按内容版本缓存：未变更时 push 不再
+  // 重复做全量 JSON 序列化 + SHA-256（版本号由 AppModel 在每次变更时递增）
+  int _classHashVersion = -1;
+  String? _classHash;
+  int _indexHashVersion = -1;
+  String? _indexHash;
+
+  String classificationHash() {
+    if (_classHashVersion != model.classificationVersion) {
+      _classHashVersion = model.classificationVersion;
+      _classHash = sha256Of(classificationBytes());
+    }
+    return _classHash!;
+  }
+
+  String indexHash() {
+    if (_indexHashVersion != model.indexVersion) {
+      _indexHashVersion = model.indexVersion;
+      _indexHash = sha256Of(indexBytes());
+    }
+    return _indexHash!;
+  }
 
   // ---------- 首次连接预览（只读） ----------
 
@@ -276,8 +297,8 @@ class SyncEngine extends ChangeNotifier {
         final t = model.byId(id);
         return t != null && t.revision > base.revision;
       default:
-        final bytes = kind == 'classification' ? classificationBytes() : indexBytes();
-        return sha256Of(bytes) != base.contentHash;
+        final hash = kind == 'classification' ? classificationHash() : indexHash();
+        return hash != base.contentHash;
     }
   }
 
@@ -335,9 +356,11 @@ class SyncEngine extends ChangeNotifier {
                   if (pageToken.isNotEmpty) b.pageToken = pageToken;
                 })))
             .data!;
+        final prefetched = await _prefetchPayloads(r.items);
         for (final item in r.items) {
-          await _applyChange(item);
+          await _applyChange(item, prefetched: prefetched, notify: false);
         }
+        model.notifyListeners(); // 整页应用完合并通知一次
         // 该页对象可靠保存后才推进状态
         state.generation = r.generation;
         state.bootstrapped = true;
@@ -367,7 +390,8 @@ class SyncEngine extends ChangeNotifier {
 
   // ---------- 应用远端变更 ----------
 
-  Future<void> _applyChange(api.SyncChange change) async {
+  Future<void> _applyChange(api.SyncChange change,
+      {Map<String, Uint8List>? prefetched, bool notify = true}) async {
     final m = _changeMap(change);
     final kind = m['kind'] as String;
     final id = m['id'] as String;
@@ -380,6 +404,7 @@ class SyncEngine extends ChangeNotifier {
       }
       state.baselines[key] =
           ObjectBaseline(kind, id, (m['revision'] as num).toInt(), null);
+      if (notify) model.notifyListeners();
       return;
     }
     final hash = m['contentHash'] as String;
@@ -393,12 +418,36 @@ class SyncEngine extends ChangeNotifier {
       state.conflicts.add(ConflictRecord(kind, id, base.revision, revision, hash));
       return;
     }
-    final bytes = await _downloadPayload(hash);
+    final bytes = prefetched?[hash] ?? await _downloadPayload(hash);
     if (sha256Of(bytes) != hash) {
       throw SyncException('HASH_MISMATCH', '$kind/$id 哈希校验失败');
     }
-    await _writeRemoteObject(kind, id, bytes);
+    await _writeRemoteObject(kind, id, bytes, notify: notify);
     state.baselines[key] = ObjectBaseline(kind, id, revision, hash);
+  }
+
+  /// 按批（4 并发）预取本页待应用对象的 payload，替代逐条串行下载。
+  Future<Map<String, Uint8List>> _prefetchPayloads(
+      Iterable<api.SyncChange> changes) async {
+    final hashes = <String>{};
+    for (final change in changes) {
+      final m = _changeMap(change);
+      if (m['type'] != 'object') continue;
+      final key = state.baselineKey(m['kind'] as String, m['id'] as String);
+      final base = state.baselines[key];
+      final hash = m['contentHash'] as String?;
+      if (base == null || base.contentHash != hash) hashes.add(hash!);
+    }
+    final out = <String, Uint8List>{};
+    final pending = hashes.toList();
+    const chunk = 4;
+    for (var i = 0; i < pending.length; i += chunk) {
+      final part = pending.skip(i).take(chunk).toList();
+      final results = await Future.wait(
+          part.map((h) async => MapEntry(h, await _downloadPayload(h))));
+      out.addEntries(results);
+    }
+    return out;
   }
 
   Future<Uint8List> _downloadPayload(String hash) async {
@@ -407,7 +456,8 @@ class SyncEngine extends ChangeNotifier {
     return r.data!;
   }
 
-  Future<void> _writeRemoteObject(String kind, String id, Uint8List bytes) async {
+  Future<void> _writeRemoteObject(String kind, String id, Uint8List bytes,
+      {bool notify = true}) async {
     final text = utf8.decode(bytes);
     switch (kind) {
       case 'todo':
@@ -424,14 +474,16 @@ class SyncEngine extends ChangeNotifier {
         final c = model.store.classificationFromRawJson(text);
         model.classification = c;
         await model.store.saveClassification(c);
+        model.classificationVersion++;
       case 'index':
         final idx = model.store.indexFromRawJson(text);
         model.index = idx;
         await model.store.saveIndex(idx);
+        model.indexVersion++;
       default:
         break;
     }
-    model.notifyListeners();
+    if (notify) model.notifyListeners();
   }
 
   // ---------- pull ----------
@@ -448,11 +500,15 @@ class SyncEngine extends ChangeNotifier {
               })))
           .data!;
       var applied = 0;
+      final prefetched = await _prefetchPayloads(resp.changes);
       for (final change in resp.changes) {
-        await _applyChange(change);
+        await _applyChange(change, prefetched: prefetched, notify: false);
         applied++;
       }
-      if (applied > 0) _log('download', applied, 'ok');
+      if (applied > 0) {
+        _log('download', applied, 'ok');
+        model.notifyListeners(); // 整页应用完合并通知一次
+      }
       // 该页对象/墓碑可靠保存后才推进 cursor
       state.pullCursor = resp.nextCursor;
       state.generation = resp.generation;
@@ -494,15 +550,14 @@ class SyncEngine extends ChangeNotifier {
       }
     }
 
-    for (final entry in [
-      ('classification', classificationBytes()),
-      ('index', indexBytes()),
-    ]) {
-      final kind = entry.$1;
-      final bytes = entry.$2;
+    for (final kind in ['classification', 'index']) {
       final base = state.baselines[state.baselineKey(kind, kind)];
-      final hash = sha256Of(bytes);
+      // 未变更时直接跳过，不再序列化全文计算哈希
+      final hash =
+          kind == 'classification' ? classificationHash() : indexHash();
       if (base?.contentHash == hash) continue;
+      final bytes =
+          kind == 'classification' ? classificationBytes() : indexBytes();
       await _ensurePayloadUploaded(hash, bytes);
       objects.add({
         'kind': kind,
