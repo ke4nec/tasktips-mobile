@@ -430,14 +430,13 @@ class CategoryTodoList extends StatelessWidget {
           )).where((t) => !t.isDeleted).toList();
           return list.isEmpty
               ? const EmptyState(icon: Icons.folder_off, title: '此分类下暂无任务')
-              : ListView(
-                  children: list
-                      .map((t) => TodoTile(
-                            model: model,
-                            todo: t,
-                            onOpen: () => openDetailPage(context, model, t.id),
-                          ))
-                      .toList(),
+              : ListView.builder(
+                  itemCount: list.length,
+                  itemBuilder: (context, i) => TodoTile(
+                    model: model,
+                    todo: list[i],
+                    onOpen: () => openDetailPage(context, model, list[i].id),
+                  ),
                 );
         },
       ),
@@ -466,14 +465,13 @@ class TagTodoList extends StatelessWidget {
           ));
           return list.isEmpty
               ? const EmptyState(icon: Icons.tag, title: '此标签下暂无任务')
-              : ListView(
-                  children: list
-                      .map((t) => TodoTile(
-                            model: model,
-                            todo: t,
-                            onOpen: () => openDetailPage(context, model, t.id),
-                          ))
-                      .toList(),
+              : ListView.builder(
+                  itemCount: list.length,
+                  itemBuilder: (context, i) => TodoTile(
+                    model: model,
+                    todo: list[i],
+                    onOpen: () => openDetailPage(context, model, list[i].id),
+                  ),
                 );
         },
       ),

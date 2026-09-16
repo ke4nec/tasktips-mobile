@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../app/app_model.dart';
@@ -20,13 +22,15 @@ class _InboxPageState extends State<InboxPage>
     with AutomaticKeepAliveClientMixin {
   final _searchCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
-  TodoQuery _q = TodoQuery();
+  final TodoQuery _q = TodoQuery();
+  Timer? _searchDebounce;
 
   @override
   bool get wantKeepAlive => true;
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -58,7 +62,13 @@ class _InboxPageState extends State<InboxPage>
                     leading: const Icon(Icons.search),
                     controller: _searchCtrl,
                     elevation: const WidgetStatePropertyAll(0),
-                    onChanged: (v) => setState(() => _q.search = v),
+                    onChanged: (v) {
+                      // 防抖：避免每个字符触发一次全量过滤+排序
+                      _searchDebounce?.cancel();
+                      _searchDebounce = Timer(
+                          const Duration(milliseconds: 200),
+                          () => setState(() => _q.search = v));
+                    },
                   ),
                 ),
               ),
@@ -125,7 +135,8 @@ class _InboxPageState extends State<InboxPage>
         borderRadius: BorderRadius.circular(10),
         onTap: () => setState(() => _q.view = v),
         child: Container(
-          constraints: const BoxConstraints(minHeight: 36),
+          // 设计稿：主操作触控区最小 48dp（.seg 规则）
+          constraints: const BoxConstraints(minHeight: 48),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           alignment: Alignment.center,
           decoration: BoxDecoration(

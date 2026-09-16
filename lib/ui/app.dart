@@ -14,33 +14,64 @@ import 'theme.dart';
 /// 全局导航键：分享入口等服务级跳转使用。
 final navigatorKey = GlobalKey<NavigatorState>();
 
-class TaskTipsApp extends StatelessWidget {
+class TaskTipsApp extends StatefulWidget {
   final AppModel model;
   const TaskTipsApp({super.key, required this.model});
 
   @override
+  State<TaskTipsApp> createState() => _TaskTipsAppState();
+}
+
+class _TaskTipsAppState extends State<TaskTipsApp> {
+  // MaterialApp 只依赖这两个字段；仅在它们变化时重建，避免每次数据
+  // 变更（保存/勾选/同步）触发整棵树（含 4 个 Tab 全部页面）rebuild。
+  late ThemeModeSetting _theme;
+  late bool _onboarded;
+
+  @override
+  void initState() {
+    super.initState();
+    _theme = widget.model.themeMode;
+    _onboarded = widget.model.onboardingDone;
+    widget.model.addListener(_onModelChange);
+  }
+
+  @override
+  void dispose() {
+    widget.model.removeListener(_onModelChange);
+    super.dispose();
+  }
+
+  void _onModelChange() {
+    final m = widget.model;
+    if (m.themeMode != _theme || m.onboardingDone != _onboarded) {
+      setState(() {
+        _theme = m.themeMode;
+        _onboarded = m.onboardingDone;
+      });
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: model,
-      builder: (context, _) => MaterialApp(
-        navigatorKey: navigatorKey,
-        title: 'TaskTips',
-        theme: buildTheme(Brightness.light),
-        darkTheme: buildTheme(Brightness.dark),
-        themeMode: switch (model.themeMode) {
-          ThemeModeSetting.system => ThemeMode.system,
-          ThemeModeSetting.light => ThemeMode.light,
-          ThemeModeSetting.dark => ThemeMode.dark,
-        },
-        home: model.onboardingDone
-            ? HomeShell(model: model)
-            : OnboardingPage(model: model),
-      ),
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      title: 'TaskTips',
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
+      themeMode: switch (_theme) {
+        ThemeModeSetting.system => ThemeMode.system,
+        ThemeModeSetting.light => ThemeMode.light,
+        ThemeModeSetting.dark => ThemeMode.dark,
+      },
+      home: _onboarded
+          ? HomeShell(model: widget.model)
+          : OnboardingPage(model: widget.model),
     );
   }
 }
 
-/// 主导航壳：底部 4 个 Tab + FAB（今日/列表/分类可见）。
+/// 主导航壳：底部 4 个 Tab + FAB（今日/列表可见，见设计稿 show() L1807）。
 class HomeShell extends StatefulWidget {
   final AppModel model;
   const HomeShell({super.key, required this.model});
@@ -82,7 +113,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       FolderPage(model: model),
       SettingsPage(model: model),
     ];
-    final showFab = _tab <= 2;
+    final showFab = _tab <= 1;
     return Scaffold(
       body: IndexedStack(index: _tab, children: pages),
       floatingActionButton: showFab
@@ -108,7 +139,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final m = widget.model;
     final t = await m.createTodo(dueDate: _tab == 0 ? m.today : null);
     if (!mounted) return;
-    openDetailPage(context, m, t.id);
+    Navigator.of(this.context)
+        .push(MaterialPageRoute(builder: (_) => DetailPage(model: m, todoId: t.id)));
   }
 }
 

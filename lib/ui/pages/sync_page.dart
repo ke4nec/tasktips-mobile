@@ -22,6 +22,11 @@ class _SyncPageState extends State<SyncPage> {
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   bool _connecting = false;
+  // FutureBuilder 的 future 缓存在 State：放 build 里会因任意 notify
+  // （同步状态翻转等）重建而重复发起网络请求。
+  Future<List<api.Project>>? _projectsFuture;
+  Future<SyncPreview>? _previewFuture;
+  String? _previewProjectId;
 
   SyncEngine? get _sync => widget.model.sync;
 
@@ -149,10 +154,21 @@ class _SyncPageState extends State<SyncPage> {
 
   // ---------- 项目选择 ----------
 
+  /// 首连概况按项目缓存一次；点“立即同步”完成 bootstrap 后
+  /// state.bootstrapped 变 true，此卡片整体不再构建。
+  Future<SyncPreview> _previewFor(SyncEngine sync) {
+    if (_previewFuture == null || _previewProjectId != sync.state.projectId) {
+      _previewProjectId = sync.state.projectId;
+      _previewFuture = sync.preview();
+    }
+    return _previewFuture!;
+  }
+
   Widget _projectPicker(BuildContext context, AppColors a) {
     final sync = _sync!;
+    _projectsFuture ??= sync.listProjects();
     return FutureBuilder<List<api.Project>>(
-      future: sync.listProjects(),
+      future: _projectsFuture,
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -165,7 +181,9 @@ class _SyncPageState extends State<SyncPage> {
                 const Text('项目列表加载失败'),
                 const SizedBox(height: 8),
                 FilledButton(
-                    onPressed: () => setState(() {}), child: const Text('重试')),
+                    onPressed: () => setState(
+                        () => _projectsFuture = sync.listProjects()),
+                    child: const Text('重试')),
               ],
             ),
           );
@@ -257,6 +275,7 @@ class _SyncPageState extends State<SyncPage> {
           _firstConnectCard(context, a, sync),
         ],
         const SizedBox(height: 8),
+        _syncStats(a, sync),
         SwitchListTile(
           title: const Text('自动同步'),
           subtitle: const Text('启动、恢复前台、网络恢复与保存后触发；前台每 60 秒检查；'
@@ -307,7 +326,7 @@ class _SyncPageState extends State<SyncPage> {
                 style: TextStyle(fontSize: 13, color: a.muted)),
             const SizedBox(height: 8),
             FutureBuilder(
-              future: sync.preview(),
+              future: _previewFor(sync),
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
                   return const Padding(
@@ -319,8 +338,21 @@ class _SyncPageState extends State<SyncPage> {
                   );
                 }
                 if (snap.hasError) {
-                  return Text('概况读取失败：${snap.error}',
-                      style: TextStyle(fontSize: 13, color: a.danger));
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('概况读取失败：${snap.error}',
+                          style: TextStyle(fontSize: 13, color: a.danger)),
+                      TextButton(
+                        onPressed: () => setState(() {
+                          _previewFuture = null;
+                          _previewFor(sync);
+                        }),
+                        child: const Text('重试'),
+                      ),
+                    ],
+                  );
                 }
                 final p = snap.data!;
                 return Text(
@@ -337,55 +369,110 @@ class _SyncPageState extends State<SyncPage> {
 
   Widget _statusCard(BuildContext context, AppColors a, SyncEngine sync) {
     final (label, color) = switch (sync.status) {
-      SyncStatus.disconnected => ('未连接', a.muted),
-      SyncStatus.connected => ('已连接，未同步', a.warn),
-      SyncStatus.syncing => ('同步中…', a.brand),
-      SyncStatus.synced => ('已同步', const Color(0xFF107C10)),
-      SyncStatus.partialFailed => ('部分失败', a.warn),
+      SyncStatus.syncing => ('同步中…', a.brandInk),
+      SyncStatus.connected => (
+          sync.state.conflicts.any((c) => !c.resolved)
+              ? '有冲突待处理'
+              : '已连接',
+          a.brandInk),
+      SyncStatus.synced => ('已同步', a.brandInk),
       SyncStatus.conflict => ('有冲突待处理', a.danger),
-      SyncStatus.error => ('同步失败', a.danger),
+      SyncStatus.partialFailed => ('部分失败', a.warn),
+      SyncStatus.error => ('上次同步失败', a.danger),
+      SyncStatus.disconnected => ('未连接', a.muted),
     };
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(children: [
-              Icon(Icons.circle, size: 10, color: color),
-              const SizedBox(width: 8),
-              Text(label,
+    // 设计稿 .sync-card：brand-container 圆角 24 + 32dp 图标 + 副行说明
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
+      decoration: BoxDecoration(
+        color: a.brandContainer,
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.circle, size: 10, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(label,
                   style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w600,
-                      color: color)),
-              const Spacer(),
-              if (sync.busy)
-                const SizedBox(
-                    height: 16,
-                    width: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2)),
-            ]),
-            const SizedBox(height: 4),
-            Text('${sync.state.serverUrl ?? ''} · ${sync.state.email ?? ''}',
-                style: TextStyle(fontSize: 13, color: a.muted)),
-            if (sync.lastError != null) ...[
-              const SizedBox(height: 8),
-              Text(sync.lastError!,
-                  style: TextStyle(fontSize: 13, color: a.danger)),
-            ],
-            const SizedBox(height: 12),
-            Row(children: [
-              Expanded(
-                child: FilledButton.icon(
-                  onPressed: sync.busy ? null : () => sync.syncNow(),
-                  icon: const Icon(Icons.sync),
-                  label: const Text('立即同步'),
-                ),
-              ),
-            ]),
+                      color: a.text)),
+            ),
+            if (sync.busy)
+              const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+          ]),
+          const SizedBox(height: 4),
+          Text('${sync.state.serverUrl ?? ''} · ${sync.state.email ?? ''}',
+              style: TextStyle(fontSize: 13, color: a.muted)),
+          if (sync.lastError != null) ...[
+            const SizedBox(height: 8),
+            Text(sync.lastError!,
+                style: TextStyle(fontSize: 13, color: a.danger)),
           ],
-        ),
+          const SizedBox(height: 12),
+          Row(children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: sync.busy ? null : () => sync.syncNow(),
+                icon: const Icon(Icons.sync),
+                label: const Text('立即同步'),
+              ),
+            ),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  /// 设计稿 .sync-stats：三格统计（推送/拉取/冲突），数据来自本机同步日志。
+  Widget _syncStats(AppColors a, SyncEngine sync) {
+    final logs = sync.state.logs;
+    var pushed = 0, pulled = 0;
+    for (final l in logs) {
+      if (l.result == 'ok') {
+        if (l.direction == 'upload') {
+          pushed += l.count;
+        } else if (l.direction == 'download') {
+          pulled += l.count;
+        }
+      }
+    }
+    final conflicts = sync.state.conflicts.length;
+    Widget cell(int n, String label) => Container(
+          color: a.panel,
+          padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 6),
+          child: Column(
+            children: [
+              Text('$n',
+                  style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.w500,
+                      color: a.text)),
+              const SizedBox(height: 3),
+              Text(label, style: TextStyle(fontSize: 12, color: a.muted)),
+            ],
+          ),
+        );
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 8),
+      decoration: BoxDecoration(
+        border: Border.all(color: a.line),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Row(
+        children: [
+          Expanded(child: cell(pushed, '推送')),
+          Expanded(child: cell(pulled, '拉取')),
+          Expanded(child: cell(conflicts, '冲突')),
+        ],
       ),
     );
   }

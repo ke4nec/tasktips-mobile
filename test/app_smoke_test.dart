@@ -7,6 +7,15 @@ import 'package:tasktips/app/app_model.dart';
 import 'package:tasktips/infra/store.dart';
 import 'package:tasktips/ui/app.dart';
 
+/// 慢环境（CI 容器）下带超时的轮询泵帧。
+Future<void> _pumpUntil(WidgetTester tester, Finder finder,
+    {int maxRounds = 50}) async {
+  for (var i = 0; i < maxRounds; i++) {
+    if (finder.evaluate().isNotEmpty) return;
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 Future<(Directory, AppModel)> _boot() async {
   final dir = await Directory.systemTemp.createTemp('tt_ui');
   final model = AppModel(TodoStore(dir));
@@ -28,9 +37,9 @@ void main() {
 
     await tester.pumpWidget(TaskTipsApp(model: model!));
     await tester.pumpAndSettle();
-    expect(find.text('开始使用'), findsOneWidget);
+    expect(find.text('开始记录'), findsOneWidget);
 
-    await tester.tap(find.text('开始使用'));
+    await tester.tap(find.text('开始记录'));
     await tester.pumpAndSettle();
     expect(find.text('今日'), findsWidgets);
     expect(find.text('分类'), findsWidgets);
@@ -53,7 +62,7 @@ void main() {
 
     await tester.runAsync(
         () => model!.setThemeMode(ThemeModeSetting.dark));
-    await tester.pumpAndSettle();
+    await _pumpUntil(tester, find.byType(NavigationBar));
     expect(find.byType(NavigationBar), findsOneWidget);
   });
 }

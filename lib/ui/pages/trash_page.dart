@@ -147,31 +147,32 @@ class _TrashPageState extends State<TrashPage> {
     final m = widget.model;
     final items = m.trashedTodos;
     if (items.isEmpty) return _empty();
-    return ListView(
-      children: [
-        for (final t in items)
-          _itemShell(
-            context,
-            leading: Icon(
-              t.isCompleted ? Icons.task_alt : Icons.description_outlined,
-              size: 20,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-            title: t.title.isEmpty ? '未命名 Todo' : t.title,
-            subtitle:
-                '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · ${m.classification.categoryPath(t.categoryId)}',
-            onRestore: () => m.restoreTodo(t.id),
-            onPurge: () async {
-              final ok = await confirmDialog(context,
-                  title: '彻底删除',
-                  message: '将永久删除“${t.title.isEmpty ? '未命名 Todo' : t.title}”，不可恢复。',
-                  confirmText: '彻底删除',
-                  destructive: true);
-              if (ok) await m.purgeTodo(t.id);
-            },
-            canPurgeNow: () => true,
+    return ListView.builder(
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final t = items[i];
+        return _itemShell(
+          context,
+          leading: Icon(
+            t.isCompleted ? Icons.task_alt : Icons.description_outlined,
+            size: 20,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
-      ],
+          title: t.title.isEmpty ? '未命名 Todo' : t.title,
+          subtitle:
+              '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · ${m.classification.categoryPath(t.categoryId)}',
+          onRestore: () => m.restoreTodo(t.id),
+          onPurge: () async {
+            final ok = await confirmDialog(context,
+                title: '彻底删除',
+                message: '将永久删除“${t.title.isEmpty ? '未命名 Todo' : t.title}”，不可恢复。',
+                confirmText: '彻底删除',
+                destructive: true);
+            if (ok) await m.purgeTodo(t.id);
+          },
+          canPurgeNow: () => true,
+        );
+      },
     );
   }
 
@@ -179,33 +180,34 @@ class _TrashPageState extends State<TrashPage> {
     final m = widget.model;
     final items = m.trashedCategories;
     if (items.isEmpty) return _empty();
-    return ListView(
-      children: [
-        for (final c in items)
-          _itemShell(
-            context,
-            leading: const Icon(Icons.folder_delete_outlined, size: 20),
-            title: m.classification.categoryPath(c.id),
-            subtitle:
-                '删除于 ${c.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(c.deletedAt!)} 天',
-            onRestore: () async {
-              await m.restoreCategory(c.id);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('目录已恢复')));
-              }
-            },
-            onPurge: () async {
-              final ok = await confirmDialog(context,
-                  title: '彻底删除',
-                  message: '将永久删除目录“${c.name}”，不可恢复。',
-                  confirmText: '彻底删除',
-                  destructive: true);
-              if (ok) await m.purgeCategory(c.id);
-            },
-            canPurgeNow: () => true,
-          ),
-      ],
+    return ListView.builder(
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final c = items[i];
+        return _itemShell(
+          context,
+          leading: const Icon(Icons.folder_delete_outlined, size: 20),
+          title: m.classification.categoryPath(c.id),
+          subtitle:
+              '删除于 ${c.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(c.deletedAt!)} 天',
+          onRestore: () async {
+            await m.restoreCategory(c.id);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('目录已恢复')));
+            }
+          },
+          onPurge: () async {
+            final ok = await confirmDialog(context,
+                title: '彻底删除',
+                message: '将永久删除目录“${c.name}”，不可恢复。',
+                confirmText: '彻底删除',
+                destructive: true);
+            if (ok) await m.purgeCategory(c.id);
+          },
+          canPurgeNow: () => true,
+        );
+      },
     );
   }
 
@@ -213,33 +215,34 @@ class _TrashPageState extends State<TrashPage> {
     final m = widget.model;
     final items = m.trashedTags;
     if (items.isEmpty) return _empty();
-    return ListView(
-      children: [
-        for (final t in items)
-          _itemShell(
-            context,
-            leading: const Icon(Icons.tag, size: 20),
-            title: t.name,
-            subtitle:
-                '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · 关联 ${m.todos.where((e) => e.tags.contains(t.name)).length} 条',
-            onRestore: () async {
-              await m.restoreTag(t.id);
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('标签已恢复')));
-              }
-            },
-            onPurge: () async {
-              final ok = await confirmDialog(context,
-                  title: '彻底删除',
-                  message: '将永久删除标签“${t.name}”，并从所有 Todo 中移除该标签。',
-                  confirmText: '彻底删除',
-                  destructive: true);
-              if (ok) await m.purgeTag(t.id);
-            },
-            canPurgeNow: () => true,
-          ),
-      ],
+    return ListView.builder(
+      itemCount: items.length,
+      itemBuilder: (context, i) {
+        final t = items[i];
+        return _itemShell(
+          context,
+          leading: const Icon(Icons.tag, size: 20),
+          title: t.name,
+          subtitle:
+              '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · 关联 ${m.todos.where((e) => e.tags.contains(t.name)).length} 条',
+          onRestore: () async {
+            await m.restoreTag(t.id);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(const SnackBar(content: Text('标签已恢复')));
+            }
+          },
+          onPurge: () async {
+            final ok = await confirmDialog(context,
+                title: '彻底删除',
+                message: '将永久删除标签“${t.name}”，并从所有 Todo 中移除该标签。',
+                confirmText: '彻底删除',
+                destructive: true);
+            if (ok) await m.purgeTag(t.id);
+          },
+          canPurgeNow: () => true,
+        );
+      },
     );
   }
 

@@ -100,10 +100,33 @@ ThemeData buildTheme(Brightness b) {
     bottomSheetTheme: BottomSheetThemeData(
       backgroundColor: a.panel,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
     ),
-   snackBarTheme: SnackBarThemeData(backgroundColor: a.surface, contentTextStyle: TextStyle(color: a.text)),
+    // 设计稿 .bottom-nav：高 80、panel 底、pill 形 indicator（64×32 圆角 18
+    // brand-container）、选中文字 brand-ink
+    navigationBarTheme: NavigationBarThemeData(
+      height: 80,
+      backgroundColor: a.panel,
+      indicatorColor: a.brandContainer,
+      indicatorShape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(18))),
+      iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+          size: 22,
+          color: states.contains(WidgetState.selected) ? a.brandInk : a.muted)),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) =>
+          TextStyle(
+              fontSize: 12,
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w600
+                  : FontWeight.w400,
+              color:
+                  states.contains(WidgetState.selected) ? a.brandInk : a.muted)),
+    ),
+    // 设计稿 .snackbar：深底反色（背景 --text，文字 --panel）
+    snackBarTheme: SnackBarThemeData(
+        backgroundColor: a.text,
+        contentTextStyle: TextStyle(color: a.panel, fontSize: 14)),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: a.brand,
       foregroundColor: a.onBrand,

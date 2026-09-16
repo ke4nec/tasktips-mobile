@@ -19,7 +19,7 @@
 ## UI contract from the mock
 - Android-first Material 3. Light brand `#0078D4`, dark brand `#4A9EFF`; bg/panel/surface/status tokens live in the `:root` blocks. UI copy is `zh-CN`.
 - 8 pages defined in the `pages` JS object: `today`, `inbox`, `detail`, `folder`, `trash`, `sync`, `settings`, `onboarding`.
-- Nav: bottom 4 tabs (`today` / `inbox` / `folder` / `settings`) + FAB visible only on `today`/`inbox`/`folder` (see `show()`); FAB routes to `detail`.
+- Nav: bottom 4 tabs (`today` / `inbox` / `folder` / `settings`) + FAB visible only on `today`/`inbox` (HTML `show()` L1807); FAB routes to `detail`.
 - Touch/a11y: 48dp min-height on primary actions (`.action`, `.filter`, `.seg`, bottom nav); keep light/dark parity via tokens; preserve the `prefers-reduced-motion` guard.
 - Theme has 3 modes (light / dark / system, default `system` via `applyTheme()`); do not hardcode a single theme.
 - Pinned behaviors: local-first Markdown autosave; trash auto-clean 30d, restore keeps folder/tags/desktop position; sync shows 3-device model with upload/download log.

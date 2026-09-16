@@ -30,7 +30,7 @@ class _DetailPageState extends State<DetailPage> {
   bool _preview = false;
   bool _closing = false;
   _SaveState _saveState = _SaveState.saved;
-  bool _imeComposing = false;
+  final bool _imeComposing = false;
   int _cbCounter = 0;
   // 待保存的最新快照（比已提交保存更新的内容在此排队）
   Todo? _pendingSnapshot;
@@ -200,6 +200,14 @@ class _DetailPageState extends State<DetailPage> {
           ),
           actions: [
             _saveIndicator(a),
+            // 设计稿 detail 页无 FAB；预览切换入口放在 AppBar
+            IconButton(
+              tooltip: _preview ? '编辑' : '预览',
+              onPressed: _togglePreview,
+              icon: Icon(_preview
+                  ? Icons.edit_outlined
+                  : Icons.visibility_outlined),
+            ),
             IconButton(
               tooltip: t.isCompleted ? '取消完成' : '完成',
               onPressed: () => m.setCompleted(_id, !t.isCompleted),
@@ -237,8 +245,8 @@ class _DetailPageState extends State<DetailPage> {
                   ? Markdown(
                   data: _bodyCtrl.text,
                   selectable: false,
-                  imageBuilder: (uri, title, alt) =>
-                      _ImagePlaceholder(a: a, alt: alt ?? title ?? '图片'),
+                  sizedImageBuilder: (config) => _ImagePlaceholder(
+                      a: a, alt: config.alt ?? config.title ?? '图片'),
                   checkboxBuilder: (checked) {
                     final idx = _cbCounter++;
                     return InkWell(
@@ -281,15 +289,11 @@ class _DetailPageState extends State<DetailPage> {
             : AnimatedPadding(
                 padding: EdgeInsets.only(
                     bottom: MediaQuery.of(context).viewInsets.bottom),
-                duration: const Duration(milliseconds: 150),
+                // 尊重系统“减弱动效”设置（设计稿 prefers-reduced-motion）
+                duration: MediaQuery.of(context).disableAnimations
+                    ? Duration.zero
+                    : const Duration(milliseconds: 150),
                 child: _formatToolbar(a),
-              ),
-        floatingActionButton: _preview
-            ? null
-            : FloatingActionButton.small(
-                onPressed: _togglePreview,
-                tooltip: '预览',
-                child: const Icon(Icons.visibility_outlined),
               ),
       ),
     );
@@ -329,45 +333,66 @@ class _DetailPageState extends State<DetailPage> {
     final catName = t.categoryId == null
         ? null
         : m.classification.categoryPath(t.categoryId);
+    // 设计稿 .meta-group/.setting-row：leading 图标 + 标签 + trailing 当前值 + chevron，
+    // 窄屏横向滚动排布，触控区 48dp
+    Widget row(IconData icon, String label, String value, VoidCallback onTap) {
+      return InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 20, color: a.muted),
+              const SizedBox(width: 8),
+              Text(label, style: TextStyle(fontSize: 13, color: a.muted)),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: a.text,
+                      fontWeight: FontWeight.w500),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Icon(Icons.chevron_right, size: 16, color: a.muted),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Container(
       padding: EdgeInsets.only(
-          left: 8, right: 8, top: 4,
+          left: 4, right: 4, top: 4,
           bottom: 4 + MediaQuery.of(context).padding.bottom),
       decoration: BoxDecoration(
         color: a.panel,
         border: Border(top: BorderSide(color: a.line)),
       ),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 4,
-        children: [
-          ActionChip(
-            avatar: Icon(Icons.flag_outlined,
-                size: 18,
-                color: t.priority == 3
-                    ? a.danger
-                    : t.priority == 2
-                        ? a.warn
-                        : a.muted),
-            label: Text('优先级：${priorityLabel(t.priority)}'),
-            onPressed: _pickPriority,
-          ),
-          ActionChip(
-            avatar: Icon(Icons.event_outlined, size: 18, color: a.muted),
-            label: Text(t.dueDate == null ? '截止日期' : '截止：${t.dueDate}'),
-            onPressed: _pickDueDate,
-          ),
-          ActionChip(
-            avatar: Icon(Icons.folder_outlined, size: 18, color: a.muted),
-            label: Text(catName ?? '未分类'),
-            onPressed: _pickCategory,
-          ),
-          ActionChip(
-            avatar: Icon(Icons.tag, size: 18, color: a.purple),
-            label: Text(t.tags.isEmpty ? '标签' : t.tags.map((e) => '#$e').join(' ')),
-            onPressed: _pickTags,
-          ),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            row(Icons.flag_outlined, '优先级', priorityLabel(t.priority),
+                _pickPriority),
+            row(
+                Icons.event_outlined,
+                '截止日期',
+                t.dueDate == null
+                    ? '未设置'
+                    : friendlyDate(m.today, t.dueDate),
+                _pickDueDate),
+            row(Icons.folder_outlined, '目录', catName ?? '未分类', _pickCategory),
+            row(Icons.tag, '标签',
+                t.tags.isEmpty ? '未设置' : t.tags.join('、'), _pickTags),
+          ],
+        ),
       ),
     );
   }
@@ -524,8 +549,8 @@ class _DetailPageState extends State<DetailPage> {
             borderRadius: BorderRadius.circular(8),
             onTap: onTap,
             child: Container(
-              width: 44,
-              height: 44,
+              width: 48,
+              height: 48,
               alignment: Alignment.center,
               child: Icon(icon, size: 20, color: a.text),
             ),
