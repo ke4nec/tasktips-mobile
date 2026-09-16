@@ -33,6 +33,8 @@
 - No tray residency, no 380×300 floating note windows, no transparency/snapping multi-window lifecycle. Do not copy `src-tauri/src/platform/` window code patterns.
 
 ## CI
+- 本地模拟：`act push -j check`（nektos/act + catthehacker/ubuntu:act-latest 镜像）已验证通过；build 作业含 Android SDK 缺失时自助安装步骤，但本机透明代理环境下 Java sdkmanager 拉取清单会失败（curl 正常），完整 build 需在 GitHub runner 或直连网络验证。
+
 - `.github/workflows/android-build.yml`：PR/push 跑 `flutter analyze` + `flutter test`；push 构建仅 arm64-v8a release APK；`v*` 标签发布到 GitHub Release（APK 当前为 debug 签名，正式签名策略属待确认事项）。pub/Gradle 缓存按锁文件键恢复；artifacts 保留 1 天且 cleanup 作业在发布后立即删除。
 
 ## Workflow
