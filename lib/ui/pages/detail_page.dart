@@ -1,0 +1,648 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+
+import '../../app/app_model.dart';
+import '../../domain/todo.dart';
+import '../theme.dart';
+import '../widgets.dart';
+
+/// Todo 编辑页：编辑/预览切换、400ms 防抖自动保存 + 2s 周期快照、
+/// 元数据（优先级/日期/目录/标签）、格式工具栏随键盘、移入回收站。
+class DetailPage extends StatefulWidget {
+  final AppModel model;
+  final String todoId;
+  const DetailPage({super.key, required this.model, required this.todoId});
+
+  @override
+  State<DetailPage> createState() => _DetailPageState();
+}
+
+enum _SaveState { none, pending, saving, saved, failed }
+
+class _DetailPageState extends State<DetailPage> {
+  final _bodyCtrl = TextEditingController();
+  final _bodyFocus = FocusNode();
+  Timer? _debounce;
+  Timer? _periodic;
+  DateTime? _lastInputAt;
+  bool _preview = false;
+  bool _closing = false;
+  _SaveState _saveState = _SaveState.saved;
+  bool _imeComposing = false;
+  int _cbCounter = 0;
+  // 待保存的最新快照（比已提交保存更新的内容在此排队）
+  Todo? _pendingSnapshot;
+  bool _saving = false;
+
+  String get _id => widget.todoId;
+  AppModel get m => widget.model;
+
+  @override
+  void initState() {
+    super.initState();
+    _bodyCtrl.text = m.byId(_id)?.body ?? '';
+    _bodyCtrl.addListener(_onBodyChanged);
+    _bodyFocus.addListener(() {
+      if (_bodyFocus.hasFocus) setState(() {});
+    });
+    // 连续输入期间至多 2s 安排一次快照保存
+    _periodic = Timer.periodic(const Duration(seconds: 2), (_) => _flushIfNeeded());
+  }
+
+  @override
+  void dispose() {
+    // 离开页面立即刷新待保存内容（进程终止可能收不到回调，故不能只依赖此处）
+    _flushSync();
+    _debounce?.cancel();
+    _periodic?.cancel();
+    _bodyCtrl.dispose();
+    _bodyFocus.dispose();
+    super.dispose();
+  }
+
+  void _onBodyChanged() {
+    if (_closing) return;
+    setState(() {
+      _lastInputAt = DateTime.now();
+      if (_saveState != _SaveState.failed) _saveState = _SaveState.pending;
+    });
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () => _saveSnapshot());
+  }
+
+  void _flushIfNeeded() {
+    // 有待保存内容且防抖迟迟未触发（持续输入）时兜底落盘
+    if (_saveState == _SaveState.pending &&
+        _lastInputAt != null &&
+        DateTime.now().difference(_lastInputAt!) >= const Duration(milliseconds: 1200) &&
+        !_saving) {
+      _saveSnapshot();
+    } else if (_saveState == _SaveState.pending && _pendingSnapshot == null && !_saving) {
+      _saveSnapshot();
+    }
+  }
+
+  Future<void> _saveSnapshot() async {
+    if (_saving || _closing) {
+      return;
+    }
+    final t = m.byId(_id);
+    if (t == null) return;
+    final snapshot = t.copyWith(body: _bodyCtrl.text);
+    _pendingSnapshot = snapshot;
+    await _drainSaves();
+  }
+
+  /// 串行执行保存；较旧回执不得清除较新修改的待保存状态。
+  Future<void> _drainSaves() async {
+    if (_saving) return;
+    _saving = true;
+    try {
+      while (_pendingSnapshot != null) {
+        final snap = _pendingSnapshot!;
+        _pendingSnapshot = null;
+        setState(() => _saveState = _SaveState.saving);
+        try {
+          await m.writeTodo(snap);
+          if (!mounted) return;
+          // 只有当输入框内容与已落盘版本一致时才显示“已保存”
+          if (_bodyCtrl.text == snap.body) {
+            setState(() {
+              _saveState = _SaveState.saved;
+            });
+          }
+        } catch (e) {
+          if (!mounted) return;
+          // 恢复待保存状态并允许重试
+          _pendingSnapshot = snap;
+          setState(() {
+            _saveState = _SaveState.failed;
+          });
+          return; // 串行：失败后停止，等待重试
+        }
+      }
+    } finally {
+      _saving = false;
+    }
+  }
+
+  void _flushSync() {
+    if (_saveState == _SaveState.pending ||
+        _pendingSnapshot != null ||
+        _saveState == _SaveState.failed) {
+      final t = m.byId(_id);
+      if (t != null && t.body != _bodyCtrl.text && !_imeComposing) {
+        // dispose 里不能 await；写盘 future 自行完成，失败内容仍在正文控件销毁前已排队
+        m.writeTodo(t.copyWith(body: _bodyCtrl.text));
+      }
+    }
+  }
+
+  Future<bool> _onWillPop() async {
+    // 保存失败时不能丢弃正文返回
+    if (_saveState == _SaveState.failed) {
+      final retry = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('尚未保存'),
+          content: const Text('正文保存失败，返回会保留在本机重试。是否重试保存后再返回？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('直接返回')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('重试保存')),
+          ],
+        ),
+      );
+      if (retry == true) {
+        await _drainSaves();
+        if (_saveState == _SaveState.failed) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('仍未保存成功，内容已保留待重试')));
+          }
+          return false;
+        }
+        return true;
+      }
+      return true; // 直接返回：内容保留在待保存快照中，不丢弃
+    }
+    _closing = true;
+    _debounce?.cancel();
+    await _drainSaves();
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = appColors(context, Theme.of(context).brightness);
+    final t = m.byId(_id);
+    if (t == null) {
+      return const Scaffold(body: Center(child: Text('Todo 不存在')));
+    }
+    _cbCounter = 0;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (await _onWillPop()) {
+          if (context.mounted) Navigator.of(context).pop();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: const BackButton(),
+          title: Text(
+            t.title.isEmpty ? '未命名 Todo' : t.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 17),
+          ),
+          actions: [
+            _saveIndicator(a),
+            IconButton(
+              tooltip: t.isCompleted ? '取消完成' : '完成',
+              onPressed: () => m.setCompleted(_id, !t.isCompleted),
+              icon: Icon(t.isCompleted
+                  ? Icons.task_alt
+                  : Icons.task_alt_outlined),
+            ),
+            PopupMenuButton<String>(
+              onSelected: (v) async {
+                if (v == 'trash') {
+                  final title = t.title.isEmpty ? '未命名 Todo' : t.title;
+                  final ok = await confirmDialog(context,
+                      title: '移入回收站',
+                      message: '将“$title”移入回收站？30 天后自动删除。',
+                      confirmText: '移入',
+                      destructive: true);
+                  if (ok) {
+                    _closing = true;
+                    await _drainSaves();
+                    await m.trashTodo(_id);
+                    if (context.mounted) Navigator.of(context).pop();
+                  }
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'trash', child: Text('移入回收站')),
+              ],
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            Expanded(
+              child: _preview
+                  ? Markdown(
+                  data: _bodyCtrl.text,
+                  selectable: false,
+                  imageBuilder: (uri, title, alt) =>
+                      _ImagePlaceholder(a: a, alt: alt ?? title ?? '图片'),
+                  checkboxBuilder: (checked) {
+                    final idx = _cbCounter++;
+                    return InkWell(
+                      onTap: () => _toggleTask(idx),
+                      child: Icon(
+                        checked
+                            ? Icons.check_box
+                            : Icons.check_box_outline_blank,
+                        size: 18,
+                        color: checked ? a.brand : a.muted,
+                      ),
+                    );
+                  },
+                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                      .copyWith(p: TextStyle(color: a.text)),
+                )
+                  : TextField(
+                      controller: _bodyCtrl,
+                      focusNode: _bodyFocus,
+                      maxLines: null,
+                      expands: true,
+                      textAlignVertical: TextAlignVertical.top,
+                      keyboardType: TextInputType.multiline,
+                      onEditingComplete: () {},
+                      style: TextStyle(color: a.text, fontSize: 15, height: 1.5),
+                      decoration: InputDecoration(
+                        hintText: '记录内容…首行会成为标题',
+                        border: InputBorder.none,
+                        filled: true,
+                        fillColor: a.bg,
+                        contentPadding: const EdgeInsets.all(16),
+                      ),
+                    ),
+            ),
+            _metadataBar(context, a, t),
+          ],
+        ),
+        bottomNavigationBar: _preview
+            ? null
+            : AnimatedPadding(
+                padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom),
+                duration: const Duration(milliseconds: 150),
+                child: _formatToolbar(a),
+              ),
+        floatingActionButton: _preview
+            ? null
+            : FloatingActionButton.small(
+                onPressed: _togglePreview,
+                tooltip: '预览',
+                child: const Icon(Icons.visibility_outlined),
+              ),
+      ),
+    );
+  }
+
+  Widget _saveIndicator(AppColors a) {
+    late Widget w;
+    switch (_saveState) {
+      case _SaveState.pending:
+      case _SaveState.saving:
+        w = const SizedBox(
+            width: 12, height: 12,
+            child: CircularProgressIndicator(strokeWidth: 2));
+      case _SaveState.saved:
+        w = Tooltip(
+            message: '已保存到本机',
+            child: Icon(Icons.check_circle, size: 18, color: a.brand));
+      case _SaveState.failed:
+        w = TextButton.icon(
+            onPressed: _drainSaves,
+            icon: Icon(Icons.error_outline, size: 18, color: a.danger),
+            label: Text('重试', style: TextStyle(color: a.danger, fontSize: 13)));
+      case _SaveState.none:
+        w = const SizedBox(width: 12);
+    }
+    return Padding(padding: const EdgeInsets.only(right: 4), child: w);
+  }
+
+  void _togglePreview() {
+    _saveSnapshot();
+    setState(() => _preview = !_preview);
+  }
+
+  // ---------- 元数据栏 ----------
+
+  Widget _metadataBar(BuildContext context, AppColors a, Todo t) {
+    final catName = t.categoryId == null
+        ? null
+        : m.classification.categoryPath(t.categoryId);
+    return Container(
+      padding: EdgeInsets.only(
+          left: 8, right: 8, top: 4,
+          bottom: 4 + MediaQuery.of(context).padding.bottom),
+      decoration: BoxDecoration(
+        color: a.panel,
+        border: Border(top: BorderSide(color: a.line)),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          ActionChip(
+            avatar: Icon(Icons.flag_outlined,
+                size: 18,
+                color: t.priority == 3
+                    ? a.danger
+                    : t.priority == 2
+                        ? a.warn
+                        : a.muted),
+            label: Text('优先级：${priorityLabel(t.priority)}'),
+            onPressed: _pickPriority,
+          ),
+          ActionChip(
+            avatar: Icon(Icons.event_outlined, size: 18, color: a.muted),
+            label: Text(t.dueDate == null ? '截止日期' : '截止：${t.dueDate}'),
+            onPressed: _pickDueDate,
+          ),
+          ActionChip(
+            avatar: Icon(Icons.folder_outlined, size: 18, color: a.muted),
+            label: Text(catName ?? '未分类'),
+            onPressed: _pickCategory,
+          ),
+          ActionChip(
+            avatar: Icon(Icons.tag, size: 18, color: a.purple),
+            label: Text(t.tags.isEmpty ? '标签' : t.tags.map((e) => '#$e').join(' ')),
+            onPressed: _pickTags,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _pickPriority() async {
+    final t = m.byId(_id)!;
+    final p = await showModalBottomSheet<int>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final v in kPriorities)
+              ListTile(
+                title: Text('优先级：${priorityLabel(v)}'),
+                trailing: t.priority == v
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.pop(ctx, v),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (p != null) {
+      await m.writeTodo(t.copyWith(priority: p));
+    }
+  }
+
+  Future<void> _pickDueDate() async {
+    final t = m.byId(_id)!;
+    final initial = t.dueDate == null
+        ? null
+        : DateTime.tryParse(t.dueDate!);
+    final d = await showDatePicker(
+      context: context,
+      initialDate: initial ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+      helpText: '选择截止日期',
+    );
+    if (d != null) {
+      final s = '${d.year.toString().padLeft(4, '0')}-'
+          '${d.month.toString().padLeft(2, '0')}-'
+          '${d.day.toString().padLeft(2, '0')}';
+      await m.writeTodo(
+          s == t.dueDate ? t.copyWith(clearDueDate: true) : t.copyWith(dueDate: s));
+    }
+  }
+
+  Future<void> _pickCategory() async {
+    final t = m.byId(_id)!;
+    final id = await showModalBottomSheet<String?>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            ListTile(
+              title: const Text('未分类'),
+              trailing: t.categoryId == null ? const Icon(Icons.check) : null,
+              onTap: () => Navigator.pop(ctx, ''),
+            ),
+            for (final c in _flattenedCategories())
+              ListTile(
+                title: Text('${'　' * (c.$2)}${c.$1.name}'),
+                trailing: t.categoryId == c.$1.id
+                    ? const Icon(Icons.check)
+                    : null,
+                onTap: () => Navigator.pop(ctx, c.$1.id),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (id != null) {
+      await m.writeTodo(id.isEmpty
+          ? t.copyWith(clearCategoryId: true)
+          : t.copyWith(categoryId: id));
+    }
+  }
+
+  List<(dynamic, int)> _flattenedCategories() {
+    final out = <(dynamic, int)>[];
+    void walk(String? parentId, int depth) {
+      for (final c in m.childCategories(parentId ?? '')) {
+        out.add((c, depth));
+        walk(c.id, depth + 1);
+      }
+    }
+
+    walk(null, 0);
+    return out;
+  }
+
+  Future<void> _pickTags() async {
+    final t = m.byId(_id)!;
+    final selected = List.of(t.tags);
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final tags = m.visibleTags;
+        return StatefulBuilder(
+          builder: (ctx, setSheet) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('标签', style: Theme.of(ctx).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  if (tags.isEmpty)
+                    const Text('暂无标签，可在“分类”页创建'),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      for (final tag in tags)
+                        FilterChip(
+                          label: Text('#${tag.name}'),
+                          selected: selected.contains(tag.name),
+                          onSelected: (sel) => setSheet(() => sel
+                              ? selected.add(tag.name)
+                              : selected.remove(tag.name)),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('确定'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    await m.writeTodo(t.copyWith(tags: selected));
+    if (mounted) setState(() {});
+  }
+
+  // ---------- 格式工具栏 ----------
+
+  Widget _formatToolbar(AppColors a) {
+    Widget btn(IconData icon, String label, VoidCallback onTap) => Tooltip(
+          message: label,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: onTap,
+            child: Container(
+              width: 44,
+              height: 44,
+              alignment: Alignment.center,
+              child: Icon(icon, size: 20, color: a.text),
+            ),
+          ),
+        );
+    return Container(
+      color: a.panel,
+      child: SafeArea(
+        top: false,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            children: [
+              btn(Icons.title, '标题', () => _wrapLine('# ')),
+              btn(Icons.format_bold, '粗体', () => _wrapSel('**', '**')),
+              btn(Icons.format_italic, '斜体', () => _wrapSel('*', '*')),
+              btn(Icons.format_strikethrough, '删除线', () => _wrapSel('~~', '~~')),
+              btn(Icons.format_list_bulleted, '无序列表', () => _wrapLine('- ')),
+              btn(Icons.format_list_numbered, '有序列表', () => _wrapLine('1. ')),
+              btn(Icons.checklist, '任务清单', () => _wrapLine('- [ ] ')),
+              btn(Icons.format_quote, '引用', () => _wrapLine('> ')),
+              btn(Icons.code, '行内代码', () => _wrapSel('`', '`')),
+              btn(Icons.link, '链接', () => _wrapSel('[', '](https://)')),
+              btn(Icons.image_outlined, '图片占位', () => _insertAtCursor('![图片](images/)')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _wrapSel(String before, String after) {
+    final sel = _bodyCtrl.selection;
+    final text = _bodyCtrl.text;
+    if (!sel.isValid) return;
+    final s = sel.start, e = sel.end;
+    final inner = text.substring(s, e);
+    _bodyCtrl.value = _bodyCtrl.value.copyWith(
+      text: '${text.substring(0, s)}$before$inner$after${text.substring(e)}',
+      selection: TextSelection.collapsed(offset: s + before.length + inner.length),
+    );
+    _bodyFocus.requestFocus();
+  }
+
+  void _wrapLine(String prefix) {
+    final sel = _bodyCtrl.selection;
+    final text = _bodyCtrl.text;
+    if (!sel.isValid) return;
+    var lineStart = sel.start;
+    while (lineStart > 0 && text[lineStart - 1] != '\n') {
+      lineStart--;
+    }
+    _bodyCtrl.value = _bodyCtrl.value.copyWith(
+      text: '${text.substring(0, lineStart)}$prefix${text.substring(lineStart)}',
+      selection: TextSelection.collapsed(offset: sel.start + prefix.length),
+    );
+    _bodyFocus.requestFocus();
+  }
+
+  void _insertAtCursor(String s) {
+    final sel = _bodyCtrl.selection;
+    final text = _bodyCtrl.text;
+    final pos = sel.isValid ? sel.start : text.length;
+    _bodyCtrl.value = _bodyCtrl.value.copyWith(
+      text: '${text.substring(0, pos)}$s${text.substring(pos)}',
+      selection: TextSelection.collapsed(offset: pos + s.length),
+    );
+    _bodyFocus.requestFocus();
+  }
+
+  /// 预览勾选：直接修改原文 Markdown 中第 index 个任务复选框。
+  void _toggleTask(int index) {
+    final re = RegExp(r'- \[([ xX])\]');
+    var i = 0;
+    final buf = StringBuffer();
+    var last = 0;
+    for (final m1 in re.allMatches(_bodyCtrl.text)) {
+      if (i++ == index) {
+        buf.write(_bodyCtrl.text.substring(last, m1.start));
+        final cur = m1.group(1)!;
+        buf.write(cur == ' ' ? '- [x]' : '- [ ]');
+        last = m1.end;
+        break;
+      }
+    }
+    if (last == 0) return;
+    buf.write(_bodyCtrl.text.substring(last));
+    _bodyCtrl.text = buf.toString();
+    setState(() {});
+    _onBodyChanged();
+  }
+}
+
+class _ImagePlaceholder extends StatelessWidget {
+  final AppColors a;
+  final String alt;
+  const _ImagePlaceholder({required this.a, required this.alt});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: a.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: a.line),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.image_outlined, size: 18, color: a.muted),
+          const SizedBox(width: 8),
+          Flexible(child: Text(alt, style: TextStyle(fontSize: 13, color: a.muted))),
+        ],
+      ),
+    );
+  }
+}

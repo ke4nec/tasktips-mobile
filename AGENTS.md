@@ -1,8 +1,9 @@
 # TaskTips Mobile — Agent Guide
 
 ## Status
-- Pre-scaffold: no manifest, source, tests, CI, or lint config. The only file is `design/android-mobile-ui.html`.
-- Stack decision: Flutter (Android-first). Scaffold pending — standard `flutter analyze` / `flutter test` / `flutter build apk` commands must be run green and recorded here before relying on them.
+- Flutter 工程（Android 优先）已建立；阶段1（本地闭环）已实现：主题/导航/8 页面、Markdown+front matter 本地存储、今日/列表/搜索/筛选/排序、编辑自动保存、目录标签管理、回收站 30 天。
+- 已验证通过的命令（2026-09-16，Flutter 3.47.4）：`flutter analyze`（0 error）、`flutter test`（25 通过）、`flutter build apk --debug`。
+- 阶段2（同步）/阶段3（分享、无障碍、发布检查）未实现；同步页当前为占位。
 
 ## Source of truth
 - `design/android-mobile-ui.html` (badge `v0.2`) is the only approved UI spec. `design/` is reference, never production UI.
