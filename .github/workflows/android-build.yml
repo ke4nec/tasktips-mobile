@@ -1,0 +1,166 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.4'
+
+jobs:
+  check:
+    name: 分析与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # pub 缓存按依赖锁文件恢复；生成客户端是 path 依赖，一并缓存
+      - name: 缓存 pub 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+            packages/tasktips_api/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'packages/tasktips_api/pubspec.yaml') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - name: 拉取依赖
+        run: |
+          flutter pub get
+          dart pub get --directory=packages/tasktips_api
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter test
+        run: flutter test
+
+  build:
+    name: 构建 arm64 APK
+    needs: check
+    # 仅标签（发布）或手动推送到 main 时构建；PR 只跑检查
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 缓存 pub 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            .dart_tool
+            packages/tasktips_api/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('pubspec.lock', 'packages/tasktips_api/pubspec.yaml') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      # Gradle 缓存（含 wrapper 与依赖），失败不阻塞
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties', 'pubspec.lock') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 拉取依赖
+        run: |
+          flutter pub get
+          dart pub get --directory=packages/tasktips_api
+
+      - name: 构建 arm64-v8a release APK
+        run: |
+          ARGS=""
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            ARGS="--build-name=${GITHUB_REF_NAME#v}"
+          fi
+          flutter build apk --release \
+            --target-platform android-arm64 \
+            --split-per-abi \
+            --build-number=${{ github.run_number }} \
+            $ARGS
+          ls -lh build/app/outputs/flutter-apk/
+
+      # 仅保留 1 天，发布完成后由 cleanup 作业立即删除
+      - name: 上传构建产物（短期保留）
+        uses: actions/upload-artifact@v4
+        with:
+          name: tasktips-arm64-apk
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          retention-days: 1
+          if-no-files-found: error
+
+      # ---------- 发布：仅 v* 标签 ----------
+      - name: 发布到 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" \
+            --title "TaskTips $TAG" \
+            --generate-notes \
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk || \
+          gh release upload "$TAG" \
+            build/app/outputs/flutter-apk/app-arm64-v8a-release.apk --clobber
+
+  cleanup:
+    name: 清理制品存储
+    needs: [build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 删除本次运行的构建制品并清空过期制品
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "删除本次运行的全部 artifacts…"
+          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[].id' | \
+          while read -r id; do
+            [ -n "$id" ] && gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "已删除 artifact $id"
+          done
+          echo "删除已过期的 artifacts（其余仓库历史残留）…"
+          now=$(date +%s)
+          gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == true) | .id' | \
+          while read -r id; do
+            [ -n "$id" ] && gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "已删除过期 artifact $id"
+          done || true
+          echo "清理完成"

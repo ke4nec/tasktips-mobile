@@ -32,6 +32,9 @@
 ## Desktop behaviors that do NOT transfer to Android
 - No tray residency, no 380×300 floating note windows, no transparency/snapping multi-window lifecycle. Do not copy `src-tauri/src/platform/` window code patterns.
 
+## CI
+- `.github/workflows/android-build.yml`：PR/push 跑 `flutter analyze` + `flutter test`；push 构建仅 arm64-v8a release APK；`v*` 标签发布到 GitHub Release（APK 当前为 debug 签名，正式签名策略属待确认事项）。pub/Gradle 缓存按锁文件键恢复；artifacts 保留 1 天且 cleanup 作业在发布后立即删除。
+
 ## Workflow
 - Commit format: `<type>(<scope>): <中文描述>` — type is `feat|fix|docs|refactor|test|build|chore`, scope in parens names the area, description in Chinese, no trailing period. Example: `feat(sync): 添加后台同步任务`.
 - This differs from sibling repos (English summaries); this repo uses Chinese descriptions.
