@@ -100,6 +100,24 @@ jobs:
           flutter pub get
           dart pub get --directory=packages/tasktips_api
 
+      # GitHub 托管 runner 预装 Android SDK；本地 act 容器没有时自助安装
+      - name: 准备 Android SDK（缺失时）
+        run: |
+          if [ -n "$ANDROID_HOME" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            echo "使用预装 SDK：$ANDROID_HOME"
+            exit 0
+          fi
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME/cmdline-tools"
+          curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+          unzip -q /tmp/clt.zip -d "$ANDROID_HOME/cmdline-tools"
+          mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            "platform-tools" "platforms;android-37" "build-tools;36.0.0" >/dev/null
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "已安装 Android SDK 到 $ANDROID_HOME"
+
       - name: 构建 arm64-v8a release APK
         run: |
           ARGS=""
