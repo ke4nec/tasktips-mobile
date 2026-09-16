@@ -1,5 +1,5 @@
 /// 本地文件仓库：content/tips、classification.json、index.json、state、recovery。
-/// 原子写入：临时文件 → rename；保留 recovery/<id>.prev.md 副本。
+/// 原子写入：临时文件 → rename；保留 `recovery/<id>.prev.md` 副本。
 library;
 
 import 'dart:convert';
@@ -237,7 +237,7 @@ class IndexData {
 
   IndexData(this.schemaVersion, this.customOrder, this.tombstones, this.lastScanAt);
 
-  static empty() => IndexData(1, {}, [], null);
+  static IndexData empty() => IndexData(1, {}, [], null);
 
   Map<String, Object?> toJson() => {
         'schemaVersion': schemaVersion,

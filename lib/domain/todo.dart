@@ -1,5 +1,5 @@
 /// 领域模型：与桌面端 tasktips-design.md §10.1 保持一致。
-library domain;
+library;
 
 /// 无时区本地日历日期 YYYY-MM-DD。
 typedef LocalDate = String;
@@ -139,7 +139,7 @@ String deriveTitle(String body) {
     if (t.isEmpty) continue;
     final runes = t.runes.toList();
     if (runes.length <= 80) return t;
-    return String.fromCharCodes(runes.take(79)) + '…';
+    return '${String.fromCharCodes(runes.take(79))}…';
   }
   return '';
 }

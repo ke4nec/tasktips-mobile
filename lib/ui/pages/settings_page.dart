@@ -50,20 +50,24 @@ class SettingsPage extends StatelessWidget {
   }
 
   Widget _themeRow(BuildContext context, AppColors a) {
-    return Column(
-      children: [
-        for (final m in ThemeModeSetting.values)
-          RadioListTile<ThemeModeSetting>(
-            value: m,
-            groupValue: model.themeMode,
-            onChanged: (v) => model.setThemeMode(v!),
-            title: Text(switch (m) {
-              ThemeModeSetting.system => '跟随系统',
-              ThemeModeSetting.light => '浅色',
-              ThemeModeSetting.dark => '深色',
-            }),
-          ),
-      ],
+    return RadioGroup<ThemeModeSetting>(
+      groupValue: model.themeMode,
+      onChanged: (v) {
+        if (v != null) model.setThemeMode(v);
+      },
+      child: Column(
+        children: [
+          for (final m in ThemeModeSetting.values)
+            RadioListTile<ThemeModeSetting>(
+              value: m,
+              title: Text(switch (m) {
+                ThemeModeSetting.system => '跟随系统',
+                ThemeModeSetting.light => '浅色',
+                ThemeModeSetting.dark => '深色',
+              }),
+            ),
+        ],
+      ),
     );
   }
 
