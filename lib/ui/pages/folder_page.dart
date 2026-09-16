@@ -440,8 +440,15 @@ class CategoryTodoList extends StatelessWidget {
                 );
         },
       ),
-      // SecondaryScaffold 无 FAB 参数，用 FloatingActionButton 包一层
-      actions: null,
+      // 从分类列表新建继承当前目录（未分类视图则不带目录）
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final t = await model.createTodo(
+              categoryId: category?.id,);
+          if (context.mounted) openDetailPage(context, model, t.id);
+        },
+        child: const Icon(Icons.add),
+      ),
     );
   }
 }
@@ -474,6 +481,14 @@ class TagTodoList extends StatelessWidget {
                   ),
                 );
         },
+      ),
+      // 从标签列表新建继承当前标签
+      floatingActionButton: FloatingActionButton(
+        onPressed: () async {
+          final t = await model.createTodo(tagName: tag.name);
+          if (context.mounted) openDetailPage(context, model, t.id);
+        },
+        child: const Icon(Icons.add),
       ),
     );
   }

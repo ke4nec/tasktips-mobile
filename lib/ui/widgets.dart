@@ -228,7 +228,7 @@ class TodoTile extends StatelessWidget {
   String _excerpt(String body) {
     // Expando 按 Todo 对象身份缓存；writeTodo/pull 落盘都会替换对象实例，
     // 旧摘要随对象一起丢弃，无需手动失效。
-    final cached = _excerptCache[this];
+    final cached = _excerptCache[todo];
     if (cached != null) return cached;
     final s = body
         .split('\n')
@@ -236,7 +236,7 @@ class TodoTile extends StatelessWidget {
         .where((l) => l.isNotEmpty)
         .skip(1) // 首行是标题
         .join(' ');
-    return _excerptCache[this] = s;
+    return _excerptCache[todo] = s;
   }
 }
 

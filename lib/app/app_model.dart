@@ -252,6 +252,9 @@ class AppModel extends ChangeNotifier {
       }
       await store.saveClassification(classification);
       await store.saveIndex(index);
+      // 同步哈希缓存按版本失效：漏加会导致清理后的分类/索引被认为无变化而不上传
+      classificationVersion++;
+      indexVersion++;
       changed = true;
     }
     if (changed) notifyListeners();

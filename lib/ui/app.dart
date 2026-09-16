@@ -71,7 +71,9 @@ class _TaskTipsAppState extends State<TaskTipsApp> {
   }
 }
 
-/// 主导航壳：底部 4 个 Tab + FAB（今日/列表可见，见设计稿 show() L1807）。
+/// 主导航壳：底部 4 个 Tab + FAB。
+/// FAB 在今日/列表/分类可见：设计文档 §2 为准（v0.2 设计稿 show() 尚未包含
+/// 分类页，属旧版；文档明确“补齐分类页新建 Todo FAB”）。
 class HomeShell extends StatefulWidget {
   final AppModel model;
   const HomeShell({super.key, required this.model});
@@ -113,7 +115,7 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       FolderPage(model: model),
       SettingsPage(model: model),
     ];
-    final showFab = _tab <= 1;
+    final showFab = _tab <= 2;
     return Scaffold(
       body: IndexedStack(index: _tab, children: pages),
       floatingActionButton: showFab
@@ -150,6 +152,7 @@ class SecondaryScaffold extends StatelessWidget {
   final Widget body;
   final List<Widget>? actions;
   final Widget? bottomBar;
+  final Widget? floatingActionButton;
 
   const SecondaryScaffold({
     super.key,
@@ -157,6 +160,7 @@ class SecondaryScaffold extends StatelessWidget {
     required this.body,
     this.actions,
     this.bottomBar,
+    this.floatingActionButton,
   });
 
   @override
@@ -169,6 +173,7 @@ class SecondaryScaffold extends StatelessWidget {
       ),
       body: body,
       bottomNavigationBar: bottomBar,
+      floatingActionButton: floatingActionButton,
     );
   }
 }

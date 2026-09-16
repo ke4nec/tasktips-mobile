@@ -100,6 +100,22 @@ void main() {
     expect(model.byId(t.id)!.tags, ['Work']);
   });
 
+  test('到期清理递增内容版本号（同步哈希缓存依赖）', () async {
+    final model = AppModel(store);
+    await model.load();
+    expect(await model.createCategory('旧目录'), isNull);
+    final c = model.rootCategories.first;
+    await model.trashCategory(c.id);
+    final cat = model.classification.byId(c.id)!;
+    cat.deletedAt = DateTime.now().subtract(const Duration(days: 31));
+    final cv = model.classificationVersion;
+    final iv = model.indexVersion;
+    await model.purgeExpiredTrash();
+    expect(model.classificationVersion, greaterThan(cv));
+    expect(model.indexVersion, greaterThan(iv));
+    expect(model.classification.byId(c.id), isNull);
+  });
+
   test('目录三级限制与同名校验', () async {
     final model = AppModel(store);
     await model.load();
