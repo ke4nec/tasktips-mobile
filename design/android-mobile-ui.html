@@ -1,0 +1,2465 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TaskTips · Android 移动端 UI 稿</title>
+    <style>
+      /* Brand, background and text colors are grounded in src/styles/theme.css. */
+      :root {
+        color-scheme: light;
+        --bg: #f3f3f3;
+        --panel: #ffffff;
+        --surface: #ededed;
+        --line: rgba(0, 0, 0, 0.1);
+        --text: #1b1b1b;
+        --muted: #5f5f5f;
+        --brand: #0078d4;
+        --brand-ink: #0067b6;
+        --onbrand: #fff;
+        --brand-container: #e0effc;
+        --brand-outline: #98bddc;
+        --danger: #c42b1c;
+        --danger-container: #fce9e7;
+        --warn: #865400;
+        --warn-container: #fff0d5;
+        --purple: #72519c;
+        --purple-container: #efe5fa;
+        --shadow: rgba(0, 0, 0, 0.15);
+        --frame: #4a4a4a;
+        --device-width: 390px;
+        --device-height: 844px;
+      }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #202020;
+        --panel: #2b2b2b;
+        --surface: #353535;
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #ffffff;
+        --muted: #b4b4b4;
+        --brand: #4a9eff;
+        --brand-ink: #8fc4ff;
+        --onbrand: #062e52;
+        --brand-container: #243b54;
+        --brand-outline: #547ba4;
+        --danger: #ff6b5e;
+        --danger-container: #432825;
+        --warn: #f4bd73;
+        --warn-container: #443724;
+        --purple: #d5b7ff;
+        --purple-container: #3b3247;
+        --shadow: rgba(0, 0, 0, 0.36);
+        --frame: #484848;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: Roboto, "Noto Sans SC", "Segoe UI", sans-serif;
+        line-height: 1.5;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        border: 0;
+        background: none;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+      a {
+        color: var(--brand-ink);
+      }
+      button:focus-visible,
+      a:focus-visible,
+      select:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      [contenteditable]:focus-visible {
+        outline: 3px solid var(--brand);
+        outline-offset: 2px;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        -webkit-tap-highlight-color: transparent;
+      }
+      svg.icon {
+        width: 24px;
+        height: 24px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vertical-align: middle;
+      }
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      button svg {
+        pointer-events: none;
+      }
+      .board {
+        max-width: 1400px;
+        margin: auto;
+        padding: 28px 32px 40px;
+      }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+      .eyebrow {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        color: var(--brand-ink);
+      }
+      .head h1 {
+        font-size: 28px;
+        letter-spacing: -0.025em;
+        margin: 5px 0;
+      }
+      .head p {
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .preview-tools {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .choice-group {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 28px;
+        background: var(--panel);
+      }
+      .choice-group button {
+        min-width: 48px;
+        min-height: 40px;
+        padding: 0 14px;
+        border-radius: 24px;
+        font-size: 13px;
+        white-space: nowrap;
+        color: var(--muted);
+      }
+      .choice-group button[aria-pressed="true"] {
+        color: var(--onbrand);
+        background: var(--brand);
+      }
+      .stage {
+        display: grid;
+        grid-template-columns: 208px minmax(0, 1fr) 272px;
+        gap: 28px;
+        align-items: start;
+      }
+      .rail,
+      .notes {
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: var(--panel);
+        padding: 16px;
+      }
+      .rail h2,
+      .notes h2 {
+        font-size: 14px;
+        font-weight: 650;
+        margin-bottom: 10px;
+      }
+      .rail button {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 48px;
+        width: 100%;
+        padding: 0 12px;
+        border-radius: 12px;
+        text-align: left;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .rail button[aria-current="page"] {
+        background: var(--brand-container);
+        color: var(--brand-ink);
+      }
+      .rail .icon {
+        width: 20px;
+        height: 20px;
+      }
+      .rail small {
+        margin-left: auto;
+        font-size: 11px;
+      }
+      .rail-foot {
+        font-size: 12px;
+        line-height: 1.7;
+        color: var(--muted);
+        padding: 16px 8px 0;
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+      }
+      .mobile-page-picker {
+        display: none;
+      }
+      .preview {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        padding: 8px;
+      }
+      .phone {
+        width: min(var(--device-width), 100%);
+        height: var(--device-height);
+        border-radius: 30px;
+        box-shadow:
+          0 0 0 8px var(--frame),
+          0 16px 40px var(--shadow);
+        background: var(--bg);
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        isolation: isolate;
+      }
+      .status {
+        height: 28px;
+        flex: none;
+        background: var(--bg);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 24px;
+        font-size: 12px;
+        font-weight: 600;
+        position: relative;
+      }
+      .status-icons {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .status svg {
+        width: 15px;
+        height: 15px;
+      }
+      .camera {
+        position: absolute;
+        left: calc(50% - 4px);
+        height: 8px;
+        width: 8px;
+        border-radius: 50%;
+        background: var(--text);
+        opacity: 0.7;
+      }
+      .appbar {
+        flex: none;
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 12px;
+        background: var(--bg);
+        z-index: 2;
+      }
+      .appbar h2 {
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1.3;
+        flex: 1;
+        min-width: 0;
+        padding: 0 4px;
+      }
+      .appbar.subpage h2 {
+        font-size: 20px;
+        font-weight: 500;
+      }
+      .appbar-caption {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.4;
+        letter-spacing: 0;
+        font-weight: 400;
+        margin-top: 2px;
+      }
+      .icon-button {
+        width: 48px;
+        height: 48px;
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        color: var(--muted);
+      }
+      .icon-button:hover {
+        background: var(--surface);
+      }
+      .icon-button.primary {
+        color: var(--brand-ink);
+      }
+      .screen {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 8px 16px 24px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line) transparent;
+        overscroll-behavior: contain;
+        scroll-padding: 16px;
+      }
+      .phone.has-fab .screen {
+        padding-bottom: 96px;
+      }
+      .bottom-nav {
+        height: 80px;
+        flex: none;
+        background: var(--panel);
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        padding: 8px 8px 4px;
+        border-top: 1px solid var(--line);
+      }
+      .bottom-nav button {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--muted);
+        min-width: 48px;
+      }
+      .nav-icon {
+        width: 64px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        border-radius: 18px;
+      }
+      .bottom-nav [aria-current="page"] {
+        color: var(--brand-ink);
+      }
+      .bottom-nav [aria-current="page"] .nav-icon {
+        background: var(--brand-container);
+      }
+      .gesture {
+        height: 24px;
+        display: grid;
+        place-items: center;
+        flex: none;
+        background: var(--panel);
+      }
+      .gesture:after {
+        content: "";
+        height: 4px;
+        width: 108px;
+        border-radius: 9px;
+        background: var(--text);
+        opacity: 0.75;
+      }
+      .fab {
+        position: absolute;
+        right: 16px;
+        bottom: 120px;
+        width: 56px;
+        height: 56px;
+        display: grid;
+        place-items: center;
+        border-radius: 16px;
+        color: var(--onbrand);
+        background: var(--brand);
+        box-shadow: 0 4px 12px var(--shadow);
+        z-index: 3;
+      }
+      .fab .icon {
+        width: 28px;
+        height: 28px;
+      }
+      .frame-caption {
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .notes h3 {
+        font-size: 13px;
+        margin: 20px 0 8px;
+      }
+      .note-copy {
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.75;
+      }
+      .spec-list {
+        list-style: none;
+        padding: 0;
+        margin: 12px 0;
+      }
+      .spec-list li {
+        font-size: 13px;
+        padding: 8px 0;
+        display: flex;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--line);
+      }
+      .spec-list span {
+        color: var(--muted);
+      }
+      .swatches {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .swatch {
+        flex: 1;
+        min-width: 0;
+        padding: 10px;
+        background: var(--surface);
+        border-radius: 12px;
+        font-size: 12px;
+      }
+      .swatch i {
+        display: block;
+        height: 22px;
+        border-radius: 7px;
+        margin-bottom: 7px;
+        background: var(--brand);
+      }
+      .swatch.surface i {
+        background: var(--panel);
+        border: 1px solid var(--line);
+      }
+      .note-caption {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 16px;
+      }
+      .intro-line {
+        font-size: 14px;
+        color: var(--muted);
+        margin: 0 0 14px;
+      }
+      .focus-card {
+        background: var(--brand-container);
+        padding: 18px 20px;
+        border-radius: 24px;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+      .focus-card h3 {
+        font-size: 20px;
+        line-height: 1.4;
+        color: var(--text);
+        font-weight: 550;
+      }
+      .focus-card p {
+        font-size: 14px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .focus-symbol {
+        width: 52px;
+        height: 52px;
+        flex: none;
+        background: var(--panel);
+        border-radius: 18px;
+        display: grid;
+        place-items: center;
+        color: var(--brand-ink);
+      }
+      .section-head {
+        min-height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .section-head h3 {
+        font-size: 14px;
+        font-weight: 550;
+        color: var(--muted);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .section-head .count {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .text-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 48px;
+        min-width: 48px;
+        padding: 0 10px;
+        color: var(--brand-ink);
+        font-size: 14px;
+        border-radius: 24px;
+      }
+      .text-button .icon {
+        width: 18px;
+        height: 18px;
+      }
+      .danger {
+        color: var(--danger) !important;
+      }
+      .tasks {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .task {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr) 48px;
+        align-items: start;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 4px;
+      }
+      .check-button {
+        min-width: 48px;
+        min-height: 48px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        margin-top: 2px;
+      }
+      .check-mark {
+        width: 22px;
+        height: 22px;
+        border: 1.5px solid var(--muted);
+        border-radius: 6px;
+        color: var(--brand-ink);
+        display: grid;
+        place-items: center;
+      }
+      .check-mark .icon {
+        width: 17px;
+        height: 17px;
+      }
+      .check-button[aria-checked="true"] .check-mark {
+        background: var(--brand-container);
+        border-color: var(--brand-ink);
+      }
+      .task-open {
+        min-height: 48px;
+        min-width: 0;
+        text-align: left;
+        display: block;
+        padding: 9px 0 10px;
+        border-radius: 8px;
+      }
+      .task-title {
+        display: block;
+        font-size: 16px;
+        font-weight: 500;
+        line-height: 1.5;
+        overflow-wrap: anywhere;
+      }
+      .task-description {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 1;
+        overflow: hidden;
+        font-size: 14px;
+        line-height: 1.5;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .task.completed .task-title {
+        text-decoration: line-through;
+        color: var(--muted);
+      }
+      .task .more {
+        margin-top: 2px;
+      }
+      .task-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 8px;
+        margin-top: 8px;
+        align-items: center;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border-radius: 6px;
+        padding: 2px 7px;
+        background: var(--brand-container);
+        color: var(--brand-ink);
+        font-size: 12px;
+      }
+      .tag.purple {
+        background: var(--purple-container);
+        color: var(--purple);
+      }
+      .tag.warn {
+        background: var(--warn-container);
+        color: var(--warn);
+      }
+      .meta-date {
+        display: inline-flex;
+        gap: 4px;
+        align-items: center;
+      }
+      .meta-date .icon {
+        width: 14px;
+        height: 14px;
+      }
+      .search {
+        display: flex;
+        align-items: center;
+        background: var(--surface);
+        border-radius: 28px;
+        min-height: 56px;
+        padding: 0 16px;
+        gap: 12px;
+        color: var(--muted);
+        margin-bottom: 4px;
+      }
+      .search input {
+        min-width: 0;
+        width: 100%;
+        border: none;
+        background: none;
+        min-height: 48px;
+        outline-offset: -3px;
+        font-size: 16px;
+      }
+      .search input::placeholder {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .view-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 4px -4px;
+        gap: 4px;
+      }
+      .view-button {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 48px;
+        padding: 0 10px;
+        font-size: 14px;
+        color: var(--text);
+        border: 0;
+        border-radius: 24px;
+        background: transparent;
+        max-width: calc(100% - 92px);
+      }
+      .filter-button {
+        min-height: 48px;
+        padding: 0 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--brand-ink);
+        font-size: 14px;
+        border-radius: 24px;
+      }
+      .filter-button .icon {
+        width: 20px;
+        height: 20px;
+      }
+      .result-summary {
+        font-size: 12px;
+        color: var(--muted);
+        padding: 0 8px 10px;
+      }
+      .empty {
+        padding: 40px 20px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .empty .icon {
+        width: 40px;
+        height: 40px;
+        color: var(--brand-ink);
+        margin-bottom: 14px;
+      }
+      .empty h3 {
+        font-size: 18px;
+        color: var(--text);
+        margin-bottom: 8px;
+      }
+      .empty .text-button {
+        margin-top: 12px;
+      }
+      .full-button {
+        min-height: 48px;
+        width: 100%;
+        border-radius: 24px;
+        padding: 10px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 550;
+        background: var(--brand);
+        color: var(--onbrand);
+      }
+      .full-button.tonal {
+        background: var(--brand-container);
+        color: var(--brand-ink);
+      }
+      .full-button.danger {
+        background: var(--danger-container);
+      }
+      .split-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .split-actions > * {
+        flex: 1;
+        min-width: 0;
+      }
+      .group {
+        border-radius: 20px;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        margin: 8px 0 18px;
+      }
+      .setting-row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        width: 100%;
+        min-height: 72px;
+        padding: 12px 16px;
+        text-align: left;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        font-size: 16px;
+      }
+      .setting-row:last-child {
+        border-bottom: 0;
+      }
+      .setting-row .leading {
+        width: 32px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        flex: none;
+        color: var(--brand-ink);
+      }
+      .setting-text {
+        flex: 1;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .setting-row small {
+        display: block;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 400;
+        margin-top: 3px;
+      }
+      .setting-row .trailing {
+        color: var(--muted);
+        font-size: 14px;
+        text-align: right;
+        max-width: 48%;
+      }
+      .setting-row .chevron {
+        width: 20px;
+        height: 20px;
+        color: var(--muted);
+        flex: none;
+      }
+      .section-label {
+        font-size: 14px;
+        font-weight: 550;
+        color: var(--muted);
+        margin: 18px 8px 8px;
+      }
+      .segmented {
+        display: flex;
+        min-height: 48px;
+        border: 1px solid var(--brand-outline);
+        border-radius: 26px;
+        overflow: hidden;
+        margin-bottom: 18px;
+      }
+      .segmented button {
+        flex: 1;
+        min-height: 48px;
+        color: var(--muted);
+        font-size: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .segmented [aria-pressed="true"] {
+        background: var(--brand-container);
+        color: var(--brand-ink);
+        font-weight: 600;
+      }
+      .folder-leading {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: var(--brand-container);
+        color: var(--brand-ink);
+        display: grid;
+        place-items: center;
+        flex: none;
+      }
+      .folder-leading.purple {
+        background: var(--purple-container);
+        color: var(--purple);
+      }
+      .folder-leading.warn {
+        background: var(--warn-container);
+        color: var(--warn);
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .note-body {
+        white-space: pre-wrap;
+        padding: 8px 4px 16px;
+        min-height: 250px;
+        line-height: 1.8;
+        font-size: 16px;
+        overflow-wrap: anywhere;
+      }
+      .note-body h3 {
+        font-size: 26px;
+        line-height: 1.4;
+        letter-spacing: -0.025em;
+        font-weight: 550;
+        margin: 4px 0 16px;
+      }
+      .note-body p {
+        margin: 12px 0;
+        color: var(--text);
+      }
+      .note-check {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 16px;
+        min-height: 48px;
+        margin-left: -12px;
+      }
+      .note-check span:last-child {
+        flex: 1;
+      }
+      .note-body [contenteditable] {
+        border-radius: 4px;
+        min-height: 100px;
+        white-space: pre-wrap;
+      }
+      .meta-group .setting-row {
+        min-height: 56px;
+        font-size: 14px;
+        padding: 8px 12px;
+        gap: 8px;
+      }
+      .meta-group .leading {
+        width: 24px;
+      }
+      .editor-toolbar {
+        flex: none;
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        gap: 4px;
+        min-height: 64px;
+      }
+      .editor-toolbar .text-button {
+        margin-left: auto;
+      }
+      .save-indicator {
+        font-size: 12px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .save-indicator .icon {
+        width: 16px;
+        height: 16px;
+      }
+      .inline-notice {
+        display: flex;
+        gap: 12px;
+        padding: 16px;
+        background: var(--brand-container);
+        border-radius: 16px;
+        color: var(--brand-ink);
+        font-size: 14px;
+        margin: 8px 0 16px;
+      }
+      .inline-notice .icon {
+        width: 22px;
+        height: 22px;
+      }
+      .inline-notice p {
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .trash-card {
+        padding: 16px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 16px;
+        margin-bottom: 12px;
+      }
+      .trash-card h3 {
+        font-size: 16px;
+        font-weight: 550;
+      }
+      .trash-card p {
+        font-size: 14px;
+        color: var(--muted);
+        margin: 6px 0 8px;
+      }
+      .trash-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: -8px;
+      }
+      .sync-card {
+        background: var(--brand-container);
+        border-radius: 24px;
+        padding: 22px 20px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .sync-card > .icon {
+        width: 32px;
+        height: 32px;
+        color: var(--brand-ink);
+      }
+      .sync-card h3 {
+        font-size: 20px;
+        font-weight: 550;
+      }
+      .sync-card p {
+        font-size: 14px;
+        margin-top: 4px;
+        color: var(--muted);
+      }
+      .sync-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        margin: 8px 0 12px;
+        background: var(--line);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .sync-stats div {
+        padding: 16px 6px;
+        background: var(--panel);
+        text-align: center;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .sync-stats b {
+        display: block;
+        font-size: 22px;
+        font-weight: 550;
+        color: var(--text);
+        margin-bottom: 3px;
+      }
+      .welcome {
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+        padding: 18px 4px 0;
+      }
+      .welcome-visual {
+        height: 152px;
+        display: grid;
+        place-items: center;
+        margin: 8px 0 24px;
+      }
+      .app-symbol {
+        width: 100px;
+        height: 100px;
+        display: grid;
+        place-items: center;
+        border-radius: 28px;
+        background: var(--brand-container);
+        color: var(--brand-ink);
+        transform: rotate(-5deg);
+      }
+      .app-symbol .icon {
+        width: 56px;
+        height: 56px;
+      }
+      .welcome h3 {
+        font-size: 28px;
+        line-height: 1.4;
+        font-weight: 550;
+        letter-spacing: -0.025em;
+      }
+      .welcome > p {
+        font-size: 16px;
+        line-height: 1.7;
+        color: var(--muted);
+        margin: 12px 0 16px;
+      }
+      .welcome-feature {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        font-size: 14px;
+        min-height: 56px;
+      }
+      .welcome-feature .icon {
+        color: var(--brand-ink);
+      }
+      .welcome-footer {
+        margin-top: auto;
+        padding-top: 24px;
+      }
+      .welcome-footer p {
+        font-size: 12px;
+        text-align: center;
+        color: var(--muted);
+        margin: 12px 0 0;
+      }
+      .modal-layer {
+        position: absolute;
+        inset: 28px 0 24px;
+        z-index: 10;
+        display: flex;
+        align-items: flex-end;
+        background: rgba(0, 0, 0, 0.4);
+      }
+      .sheet {
+        width: 100%;
+        max-height: 94%;
+        overflow-y: auto;
+        background: var(--panel);
+        border-radius: 28px 28px 0 0;
+        padding: 0 20px 20px;
+        box-shadow: 0 -8px 32px var(--shadow);
+        scrollbar-width: thin;
+      }
+      .sheet-handle {
+        width: 32px;
+        height: 4px;
+        margin: 10px auto 4px;
+        border-radius: 8px;
+        background: var(--muted);
+        opacity: 0.5;
+      }
+      .sheet-head {
+        display: flex;
+        align-items: center;
+        min-height: 56px;
+        margin: 0 -8px 8px 4px;
+      }
+      .sheet-head h3 {
+        font-size: 22px;
+        font-weight: 550;
+        flex: 1;
+      }
+      .sheet-copy {
+        font-size: 14px;
+        color: var(--muted);
+        margin: 8px 4px 16px;
+        overflow-wrap: anywhere;
+      }
+      .sheet-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        margin-top: 16px;
+      }
+      .sheet-actions button {
+        min-height: 48px;
+        min-width: 72px;
+        padding: 8px 20px;
+        border-radius: 24px;
+        font-size: 14px;
+      }
+      .sheet-actions .confirm {
+        background: var(--brand);
+        color: var(--onbrand);
+      }
+      .sheet-actions .confirm.danger {
+        background: var(--danger-container);
+      }
+      .sheet-option {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 56px;
+        width: 100%;
+        padding: 8px 12px;
+        text-align: left;
+        font-size: 16px;
+        border-radius: 12px;
+      }
+      .sheet-option[aria-pressed="true"],
+      .sheet-option[aria-checked="true"] {
+        background: var(--brand-container);
+        color: var(--brand-ink);
+      }
+      .sheet-option .trailing {
+        margin-left: auto;
+      }
+      .field {
+        display: block;
+        margin: 12px 0;
+        font-size: 14px;
+        color: var(--muted);
+      }
+      .field input,
+      .field select,
+      .field textarea {
+        width: 100%;
+        min-height: 56px;
+        border: 1px solid var(--muted);
+        border-radius: 10px;
+        background: var(--panel);
+        padding: 12px;
+        margin-top: 6px;
+        color: var(--text);
+        font-size: 16px;
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 120px;
+      }
+      .snackbar {
+        position: absolute;
+        bottom: 118px;
+        left: 16px;
+        right: 16px;
+        min-height: 48px;
+        padding: 14px 16px;
+        border-radius: 12px;
+        background: var(--text);
+        color: var(--panel);
+        font-size: 14px;
+        z-index: 15;
+        box-shadow: 0 4px 12px var(--shadow);
+      }
+      .phone:not(.has-nav) .snackbar {
+        bottom: 94px;
+      }
+      .note-caption a {
+        display: inline-block;
+        line-height: 1.8;
+      }
+      .color-dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--brand);
+        flex: none;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (min-width: 1101px) {
+        .rail,
+        .notes {
+          position: sticky;
+          top: 24px;
+        }
+      }
+      @media (max-width: 1100px) {
+        .stage {
+          grid-template-columns: 180px minmax(0, 1fr);
+        }
+        .notes {
+          grid-column: 1/-1;
+        }
+        .preview-tools {
+          max-width: 290px;
+        }
+        .head {
+          align-items: flex-start;
+        }
+      }
+      @media (max-width: 700px) {
+        .board {
+          padding: 20px 16px 28px;
+        }
+        .head {
+          display: block;
+          margin-bottom: 16px;
+        }
+        .head h1 {
+          font-size: 24px;
+        }
+        .head p {
+          font-size: 12px;
+        }
+        .preview-tools {
+          max-width: none;
+          justify-content: flex-start;
+          margin-top: 16px;
+        }
+        .choice-group button {
+          min-height: 44px;
+          padding: 0 12px;
+        }
+        .stage {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+        }
+        .rail {
+          display: none;
+        }
+        .mobile-page-picker {
+          display: block;
+          width: 100%;
+          font-size: 13px;
+          color: var(--muted);
+        }
+        .mobile-page-picker select {
+          display: block;
+          min-height: 48px;
+          width: 100%;
+          border: 1px solid var(--line);
+          border-radius: 12px;
+          padding: 0 12px;
+          background: var(--panel);
+          color: var(--text);
+          font-size: 14px;
+          margin-top: 6px;
+        }
+        .preview {
+          padding: 8px 0;
+          width: 100%;
+        }
+        .notes {
+          width: 100%;
+        }
+        .phone {
+          border-radius: 24px;
+          box-shadow:
+            0 0 0 5px var(--frame),
+            0 8px 20px var(--shadow);
+        }
+        .frame-caption {
+          font-size: 11px;
+        }
+        .notes h2 {
+          margin-bottom: 8px;
+        }
+      }
+      @media (max-width: 420px) {
+        .board {
+          padding: 16px 0 24px;
+        }
+        .phone {
+          border-radius: 0;
+          box-shadow: none;
+          width: 100%;
+        }
+        .preview {
+          padding: 0;
+        }
+        .head,
+        .mobile-page-picker,
+        .notes {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+        .notes {
+          padding-top: 16px;
+          padding-bottom: 16px;
+        }
+        .screen {
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          scroll-behavior: auto !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="board">
+      <header class="head">
+        <div>
+          <div class="eyebrow">TASKTIPS · ANDROID / MATERIAL 3</div>
+          <h1>轻一点，也更顺手。</h1>
+          <p>Android 移动端 UI 稿 · v0.3 布局与触控优化 · 所有交互仅使用演示数据</p>
+        </div>
+        <div class="preview-tools">
+          <div class="choice-group" role="group" aria-label="设计稿主题">
+            <button data-theme-choice="light" aria-pressed="false">浅色</button
+            ><button data-theme-choice="dark" aria-pressed="false">深色</button
+            ><button data-theme-choice="system" aria-pressed="true">跟随系统</button>
+          </div>
+          <div class="choice-group" role="group" aria-label="画布宽度">
+            <button data-width="360" aria-pressed="false">360</button
+            ><button data-width="390" aria-pressed="true">390</button
+            ><button data-width="412" aria-pressed="false">412 dp</button>
+          </div>
+        </div>
+      </header>
+      <div class="stage">
+        <nav class="rail" aria-label="设计稿页面">
+          <h2>页面预览</h2>
+          <div id="page-links"></div>
+          <p class="rail-foot">
+            颜色取自当前应用。<br />布局采用 Android 模式。<br />点按控件可体验主要流程。
+          </p>
+        </nav>
+        <label class="mobile-page-picker"
+          >页面预览<select id="page-select" aria-label="选择设计稿页面"></select
+        ></label>
+        <main class="preview">
+          <div class="phone has-nav" id="phone">
+            <div class="status" aria-hidden="true">
+              <span>9:41</span><span class="camera"></span
+              ><span class="status-icons" id="status-icons"></span>
+            </div>
+            <header class="appbar" id="appbar"></header>
+            <div class="screen" id="app" tabindex="-1"></div>
+            <button
+              class="fab"
+              id="fab"
+              aria-label="新建 Todo"
+              data-action="new-todo"
+              hidden
+            ></button>
+            <nav class="bottom-nav" id="bottom-nav" aria-label="应用导航"></nav>
+            <div class="editor-toolbar" id="editor-toolbar" hidden></div>
+            <div class="gesture" aria-hidden="true"></div>
+            <div class="modal-layer" id="modal" hidden></div>
+            <div class="snackbar" id="snackbar" role="status" hidden></div>
+          </div>
+          <p class="frame-caption" id="frame-caption">
+            390 × 844 逻辑尺寸 · 1 CSS px 对应 1 dp 的参考比例
+          </p>
+        </main>
+        <aside class="notes">
+          <h2 id="note-title">今日 · 先看要做的事</h2>
+          <p class="note-copy" id="note-copy"></p>
+          <h3>统一尺寸</h3>
+          <ul class="spec-list">
+            <li><span>图标 / 点击区域</span><b>24 / 48 dp</b></li>
+            <li><span>复选框 / 点击区域</span><b>22 / 48 dp</b></li>
+            <li><span>标题 / 正文 / 辅助</span><b>24 / 16 / 14 sp</b></li>
+            <li><span>导航标签 / 元数据</span><b>12 sp</b></li>
+            <li><span>页边距 / 卡片间距</span><b>16 / 8 dp</b></li>
+            <li><span>底部导航 / FAB</span><b>80 / 56 dp</b></li>
+          </ul>
+          <div class="swatches">
+            <div class="swatch"><i></i><span id="brand-value">#0078D4</span></div>
+            <div class="swatch surface"><i></i><span id="surface-value">#FFFFFF</span></div>
+          </div>
+          <p class="note-caption">
+            主色与底色对应 src/styles/theme.css；蓝色容器上的文字使用加深 / 提亮的蓝色，保证可读性。
+          </p>
+          <p class="note-caption">
+            <a
+              href="https://developer.android.com/design/ui/mobile/guides/foundations/accessibility"
+              target="_blank"
+              rel="noreferrer"
+              >Android 触控与文字规范 ↗</a
+            ><br /><a
+              href="https://developer.android.com/design/ui/mobile/guides/layout-and-content/edge-to-edge"
+              target="_blank"
+              rel="noreferrer"
+              >系统栏与安全区域 ↗</a
+            >
+          </p>
+        </aside>
+      </div>
+    </div>
+    <script>
+      const paths = {
+        today:
+          '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 10h18m-13 5 3 3 5-5"/>',
+        list: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9h2m3 0h5M7 15h2m3 0h5"/>',
+        folder:
+          '<path d="M3 7a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
+        settings:
+          '<path d="m9 3-.7 2.3-2 .9L4 5.8l-2 3.4 1.6 1.8v2L2 14.8l2 3.4 2.3-.4 2 .9L9 21h4l.7-2.3 2-.9 2.3.4 2-3.4-1.6-1.8v-2L20 9.2l-2-3.4-2.3.4-2-.9L13 3Z"/><circle cx="11" cy="12" r="3"/>',
+        edit: '<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>',
+        plus: '<path d="M12 5v14M5 12h14"/>',
+        check: '<path d="m5 12 4 4L19 6"/>',
+        back: '<path d="M20 12H4m7-7-7 7 7 7"/>',
+        down: '<path d="m6 9 6 6 6-6"/>',
+        right: '<path d="m9 5 7 7-7 7"/>',
+        close: '<path d="m6 6 12 12M6 18 18 6"/>',
+        more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+        search: '<circle cx="10" cy="10" r="6"/><path d="m15 15 6 6"/>',
+        filter:
+          '<path d="M4 7h8m5 0h3M4 17h3m5 0h8"/><circle cx="14" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>',
+        sync: '<path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5m-4 8a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/>',
+        trash: '<path d="M3 6h18M9 6V3h6v3m-10 0 1 15h12l1-15M10 10v7m4-7v7"/>',
+        restore: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6m3-4v6l4 2"/>',
+        tag: '<path d="M3 3h8l10 10-8 8L3 11Z"/><circle cx="7.5" cy="7.5" r="1"/>',
+        flag: '<path d="M5 21V3h7l2 2h6v10h-7l-2-2H5"/>',
+        theme: '<path d="M20 14a8 8 0 0 1-10-10 9 9 0 1 0 10 10Z"/>',
+        lock: '<rect x="4" y="10" width="16" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/>',
+        info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.01"/>',
+        heart: '<path d="M12 21 3 12C-3 4 8-1 12 6 16-1 27 4 21 12Z"/>',
+        cloud: '<path d="M6 19a5 5 0 0 1-1-10 7 7 0 0 1 13-1 5.5 5.5 0 1 1 0 11Z"/>',
+        image:
+          '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="2"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',
+        format: '<path d="M4 5h16M12 5v15m-4 0h8"/>',
+        wifi: '<path d="M2 8a16 16 0 0 1 20 0M5 12a11 11 0 0 1 14 0m-10 4a5 5 0 0 1 6 0m-3 4h.01"/>',
+        signal: '<path d="M3 20v-3m5 3v-7m5 7V9m5 11V4"/>',
+        battery:
+          '<rect x="3" y="6" width="16" height="12" rx="2"/><path d="M21 10v4M6 9v6m3-6v6m3-6v6"/>',
+        phone: '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4"/>',
+      };
+      const icon = (name, cls = "") =>
+        `<svg class="icon ${cls}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.info}</svg>`;
+      const esc = (text) =>
+        String(text).replace(
+          /[&<>"']/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+        );
+      const iconButton = (name, label, action, extra = "") =>
+        `<button class="icon-button ${extra}" aria-label="${esc(label)}" data-action="${action}">${icon(name)}</button>`;
+      const pages = [
+        [
+          "today",
+          "今日",
+          "today",
+          "先看要做的事",
+          "收起大面积进度卡，突出过期与今天到期的未完成任务。完成后立即离开今日，避免已完成和未来任务混入。",
+        ],
+        [
+          "inbox",
+          "Todo 列表",
+          "list",
+          "搜索和筛选各就其位",
+          "搜索框 56dp；视图选择与筛选合为一行。排序、优先级放入底部面板，列表获得更多首屏空间。",
+        ],
+        [
+          "detail",
+          "Todo 编辑",
+          "edit",
+          "把空间留给内容",
+          "二级页面隐藏主导航，返回按钮始终可见。正文、元数据、底部格式工具分区排布。编辑仅为示意，刷新会重置演示数据。",
+        ],
+        [
+          "folder",
+          "目录与标签",
+          "folder",
+          "分类也能单手操作",
+          "目录与标签使用分段切换。列表行至少 72dp，整行可点；新增、编辑通过底部面板完成。",
+        ],
+        [
+          "trash",
+          "回收站",
+          "trash",
+          "恢复优先，删除谨慎",
+          "恢复放在可见位置，永久删除与清空均有二次确认。保留 30 天的说明保持简短。",
+        ],
+        [
+          "sync",
+          "同步",
+          "sync",
+          "状态和设置分开",
+          "显示当前同步状态、账号与项目、同步结果。失败与冲突预览可从右上角切换；演示不发起任何网络请求。",
+        ],
+        [
+          "settings",
+          "设置",
+          "settings",
+          "清晰的分组和行高",
+          "设置行采用 16sp 标题与 14sp 说明；当前值在行内展示。桌面置顶、透明度和开机启动不作为 Android 控件。",
+        ],
+        [
+          "onboarding",
+          "首次启动",
+          "phone",
+          "直接开始记录",
+          "引导页隐藏主导航，主按钮放在内容末尾。默认本地使用，不要求先登录，也不承诺 Android 悬浮便签能力。",
+        ],
+      ];
+      const today = "2026-09-16";
+      let todos = [
+        {
+          id: 1,
+          title: "确认周会演示大纲",
+          body: "补充关键数据，控制演示在 15 分钟内。",
+          folder: "工作",
+          tag: "设计",
+          due: "2026-09-15",
+          priority: 3,
+          done: false,
+        },
+        {
+          id: 2,
+          title: "完成移动端页面评审",
+          body: "核对布局、文字大小和点击区域。\n- [ ] 检查浅色与深色\n- [ ] 走通新建和编辑流程\n- [ ] 整理评审结论",
+          folder: "工作",
+          tag: "设计",
+          due: today,
+          priority: 2,
+          done: false,
+        },
+        {
+          id: 3,
+          title: "整理这周的阅读笔记",
+          body: "把零散的想法整理成一份清单。",
+          folder: "个人",
+          tag: "学习",
+          due: today,
+          priority: 1,
+          done: false,
+        },
+        {
+          id: 4,
+          title: "买咖啡豆",
+          body: "试试花香和柑橘风味的浅烘焙。",
+          folder: "生活",
+          tag: "待购买",
+          due: "2026-09-19",
+          priority: 0,
+          done: false,
+        },
+        {
+          id: 5,
+          title: "阅读 Rust async 章节",
+          body: "完成第 5 节并记录疑问。",
+          folder: "个人",
+          tag: "学习",
+          due: "2026-09-17",
+          priority: 1,
+          done: false,
+        },
+        {
+          id: 6,
+          title: "整理桌面文件",
+          body: "归档本周的文档与图片素材。",
+          folder: "工作",
+          tag: "整理",
+          due: today,
+          priority: 0,
+          done: true,
+        },
+      ];
+      let trash = [
+        {
+          id: 7,
+          title: "旧版首页草稿",
+          body: "旧版参考记录。",
+          folder: "工作",
+          tag: "设计",
+          due: "",
+          priority: 0,
+          done: false,
+          remaining: 14,
+        },
+        {
+          id: 8,
+          title: "联系物业更换门禁卡",
+          body: "确认办理时间。",
+          folder: "生活",
+          tag: "生活",
+          due: "",
+          priority: 0,
+          done: false,
+          remaining: 29,
+        },
+      ];
+      let folderNames = ["工作", "个人", "生活"];
+      let tagNames = ["设计", "学习", "待购买", "整理"];
+      let currentPage = "today",
+        selectedId = 2,
+        returnPage = "inbox",
+        listView = "open",
+        query = "",
+        priorityFilter = "all",
+        sort = "default",
+        categoryTab = "folder",
+        categoryFilter = null,
+        themeChoice = "system",
+        syncState = "success",
+        autoSync = true;
+      let modalReturnFocus = null,
+        pendingConfirm = null,
+        draftTags = [],
+        toastTimer;
+      const app = document.getElementById("app"),
+        phone = document.getElementById("phone"),
+        modal = document.getElementById("modal");
+      const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+      const selectedTodo = () => todos.find((t) => t.id === selectedId);
+      const priorityNames = ["无", "低", "中", "高"];
+      const todoTags = (t) => t.tags ?? (t.tag ? [t.tag] : []);
+      const inCategory = (t, kind, name) =>
+        kind === "tag" ? todoTags(t).includes(name) : t.folder === name;
+      const friendlyDate = (d) =>
+        d === today
+          ? "今天"
+          : d === "2026-09-17"
+            ? "明天"
+            : d
+              ? `${Number(d.slice(5, 7))} 月 ${Number(d.slice(8))} 日`
+              : "未设置";
+      function taskCard(t) {
+        const date = t.due
+          ? `<span class="meta-date ${t.due < today && !t.done ? "danger" : ""}">${icon("today")}${t.due < today && !t.done ? "已过期 · " : ""}${friendlyDate(t.due)}</span>`
+          : "";
+        return `<article class="task ${t.done ? "completed" : ""}" data-todo="${t.id}"><button class="check-button" role="checkbox" aria-checked="${t.done}" aria-label="${t.done ? "取消完成" : "完成"}：${esc(t.title)}" data-toggle="${t.id}"><span class="check-mark">${t.done ? icon("check") : ""}</span></button><button class="task-open" data-open="${t.id}" aria-label="编辑：${esc(t.title)}"><span class="task-title">${esc(t.title)}</span><span class="task-description">${esc(t.body.split("\n")[0])}</span><span class="task-meta">${todoTags(
+          t,
+        )
+          .map((tag) => `<span class="tag">${esc(tag)}</span>`)
+          .join(
+            "",
+          )}${t.priority === 3 ? '<span class="tag warn">高优先级</span>' : ""}${date}</span></button><button class="icon-button more" data-more="${t.id}" aria-label="更多操作：${esc(t.title)}">${icon("more")}</button></article>`;
+      }
+      function empty(title, desc) {
+        return `<div class="empty">${icon("check")}<h3>${title}</h3><p>${desc}</p></div>`;
+      }
+      function taskGroup(title, items) {
+        return items.length
+          ? `<div class="section-head"><h3>${title}<span class="count">${items.length}</span></h3></div><div class="tasks">${items.map(taskCard).join("")}</div>`
+          : "";
+      }
+      function settingRow(name, label, description = "", action = "", trail = "") {
+        const tag = action ? "button" : "div";
+        return `<${tag} class="setting-row" ${action ? `data-action="${action}"` : ""}><span class="leading">${icon(name)}</span><span class="setting-text">${label}${description ? `<small>${description}</small>` : ""}</span>${trail ? `<span class="trailing">${trail}</span>` : ""}${action ? icon("right", "chevron") : ""}</${tag}>`;
+      }
+      function todayPage() {
+        const due = todos.filter((t) => !t.done && t.due && t.due <= today),
+          overdue = due.filter((t) => t.due < today);
+        return `<p class="intro-line">9 月 16 日，星期三</p><div class="focus-card"><div class="focus-symbol">${icon("today")}</div><div><h3>${due.length ? "今天，专注这 " + due.length + " 件事" : "今天的任务都完成了"}</h3><p>${overdue.length ? overdue.length + " 项已过期，先处理它们" : "给重要的事留一点时间。"}</p></div></div>${taskGroup("已过期", overdue)}${taskGroup(
+          "今天到期",
+          due.filter((t) => t.due === today),
+        )}${!due.length ? empty("可以轻松一下了", "去列表看看接下来要做的事。") : ""}<button class="text-button" data-action="upcoming">查看即将到期 ${icon("right")}</button>`;
+      }
+      function filteredTodos() {
+        return todos
+          .filter(
+            (t) =>
+              (listView === "all" ||
+                (listView === "open" && !t.done) ||
+                (listView === "completed" && t.done) ||
+                (listView === "upcoming" && !t.done && t.due > today)) &&
+              (!query ||
+                [t.title, t.body, ...todoTags(t)]
+                  .join(" ")
+                  .toLowerCase()
+                  .includes(query.toLowerCase())) &&
+              (priorityFilter === "all" || String(t.priority) === priorityFilter) &&
+              (!categoryFilter || inCategory(t, categoryFilter.kind, categoryFilter.name)),
+          )
+          .sort((a, b) =>
+            sort === "title"
+              ? a.title.localeCompare(b.title, "zh-CN")
+              : sort === "due"
+                ? (a.due || "9999").localeCompare(b.due || "9999")
+                : Number(a.done) - Number(b.done) ||
+                  Number(Boolean(b.due && b.due < today)) -
+                    Number(Boolean(a.due && a.due < today)) ||
+                  b.priority - a.priority ||
+                  (a.due || "9999").localeCompare(b.due || "9999"),
+          );
+      }
+      function renderResults() {
+        const items = filteredTodos();
+        document.getElementById("list-results").innerHTML = items.length
+          ? `<div class="tasks">${items.map(taskCard).join("")}</div>`
+          : empty("没有匹配的 Todo", "试试其他关键词，或清除筛选条件。");
+        document.getElementById("result-count").textContent =
+          `${items.length} 项${priorityFilter !== "all" ? " · " + priorityNames[priorityFilter] + "优先级" : ""} · ${sort === "title" ? "按标题" : sort === "due" ? "按截止日期" : "默认排序"}`;
+      }
+      function listPage() {
+        return `<label class="search">${icon("search")}<input id="search-input" type="search" aria-label="搜索 Todo" placeholder="搜索标题、内容或标签" value="${esc(query)}" /></label><div class="view-row"><select class="view-button" id="view-select" aria-label="Todo 视图">${[
+          ["open", "未完成"],
+          ["all", "全部 Todo"],
+          ["upcoming", "即将到期"],
+          ["completed", "已完成"],
+        ]
+          .map(([v, t]) => `<option value="${v}" ${listView === v ? "selected" : ""}>${t}</option>`)
+          .join(
+            "",
+          )}</select><button class="filter-button" data-action="filters">${icon("filter")}筛选${priorityFilter !== "all" || sort !== "default" ? " · " + (Number(priorityFilter !== "all") + Number(sort !== "default")) : ""}</button></div>${categoryFilter ? `<button class="text-button" data-action="clear-category">${esc(categoryFilter.name)} ${icon("close")}</button>` : ""}<div class="result-summary" id="result-count"></div><div id="list-results"></div>`;
+      }
+      function editorPage() {
+        const t = selectedTodo();
+        return `<div class="save-indicator">${icon("check")}<span id="save-status">已保存到本机</span></div><div class="note-body" id="note-body" contenteditable="true" role="textbox" aria-label="Todo 正文" aria-multiline="true"><h3>${esc(t.title === "未命名 Todo" ? "" : t.title)}</h3><div>${esc(t.body).replaceAll("\n", "<br>")}</div></div><div class="group meta-group">${settingRow("flag", "优先级", "", "priority", priorityNames[t.priority])}${settingRow("today", "截止日期", "", "date", friendlyDate(t.due))}${settingRow("folder", "目录", "", "pick-folder", esc(t.folder || "未分类"))}${settingRow("tag", "标签", "", "pick-tag", esc(todoTags(t).join("、") || "未设置"))}</div>`;
+      }
+      function classificationPage() {
+        const isFolder = categoryTab === "folder";
+        const names = isFolder ? folderNames : tagNames;
+        return `<div class="segmented" role="group" aria-label="分类类型"><button data-category-tab="folder" aria-pressed="${isFolder}">${icon("folder")}目录</button><button data-category-tab="tag" aria-pressed="${!isFolder}">${icon("tag")}标签</button></div><div class="group">${names.map((name, i) => `<button class="setting-row" data-category-name="${esc(name)}"><span class="folder-leading ${i === 1 ? "purple" : i === 2 ? "warn" : ""}">${icon(isFolder ? "folder" : "tag")}</span><span class="setting-text">${esc(name)}<small>${todos.filter((t) => inCategory(t, categoryTab, name) && !t.done).length} 项未完成</small></span>${icon("right", "chevron")}</button>`).join("")}</div>${isFolder ? settingRow("folder", "未分类", `${todos.filter((t) => !t.folder).length} 项 Todo`, "uncategorized") : ""}<button class="full-button tonal" data-action="new-category">${icon("plus")}新建${isFolder ? "目录" : "标签"}</button><p class="note-caption">点按进入分类列表，在右上角管理名称。</p>`;
+      }
+      function trashPage() {
+        return `<div class="inline-notice">${icon("info")}<div>删除的 Todo 保留 30 天<p>恢复后保留原目录与标签。</p></div></div><div class="section-head"><h3>${trash.length} 项 Todo</h3><button class="text-button danger" data-action="empty-trash" ${!trash.length ? "disabled" : ""}>清空</button></div>${trash.map((t) => `<article class="trash-card"><h3>${esc(t.title)}</h3><p>${esc(t.folder || "未分类")} · ${t.remaining} 天后自动删除</p><div class="trash-actions"><button class="text-button" data-restore="${t.id}">${icon("restore")}恢复</button><button class="text-button danger" data-purge="${t.id}">彻底删除</button></div></article>`).join("") || empty("回收站是空的", "已删除的 Todo 会暂存在这里。")}`;
+      }
+      function syncPage() {
+        return `<div class="sync-card">${icon(syncState === "failed" ? "info" : "sync")}<div><h3>${syncState === "failed" ? "同步未完成" : syncState === "conflict" ? "有 1 项冲突待处理" : "同步已完成"}</h3><p>${syncState === "failed" ? "网络连接中断，本机修改已保留" : syncState === "conflict" ? "同一条 Todo 在两端被修改" : "上次同步 · 今天 09:39"}</p></div></div><button class="full-button" data-action="sync-now">${icon("sync")}${syncState === "failed" ? "重试同步" : "立即同步"}</button>${syncState === "conflict" ? '<button class="text-button" data-action="conflict">查看冲突并选择版本</button>' : ""}<h3 class="section-label">同步连接</h3><div class="group">${settingRow("cloud", "服务端同步", "个人账号 · 已连接", "sync-config")}${settingRow("folder", "我的 Todo", "当前项目", "sync-project")}${settingRow("sync", "自动同步", autoSync ? "已开启 · 每 60 秒" : "已关闭", "auto-sync")}${settingRow("phone", "当前设备", "Android · 本机")}</div><h3 class="section-label">最近一次结果</h3><div class="sync-stats"><div><b>2</b>推送</div><div><b>0</b>拉取</div><div><b>${syncState === "conflict" ? "1" : "0"}</b>冲突</div></div><p class="note-caption">离线时继续编辑，连接恢复后再同步。</p>`;
+      }
+      function settingsPage() {
+        return `<h3 class="section-label">外观</h3><div class="group">${settingRow("theme", "主题", '<span id="theme-description"></span>', "theme")}</div><h3 class="section-label">数据</h3><div class="group">${settingRow("sync", "同步", autoSync ? "自动同步已开启" : "自动同步已关闭", "go-sync")}${settingRow("trash", "回收站", `${trash.length} 项 Todo`, "go-trash")}${settingRow("folder", "本地存储", "内容保存在应用专属空间", "storage")}</div><h3 class="section-label">关于</h3><div class="group">${settingRow("info", "关于 TaskTips", "版本 0.1.0", "about")}</div><p class="note-caption">本地优先，随时记下要做的事。</p>`;
+      }
+      function onboardingPage() {
+        return `<div class="welcome"><div class="welcome-visual"><div class="app-symbol">${icon("list")}</div></div><h3>把想法记下来，<br>把事情做好。</h3><p>一个轻巧的待办空间，<br>装下工作、生活和随手的灵感。</p><div class="welcome-feature">${icon("edit")}直接写下内容，自动保存</div><div class="welcome-feature">${icon("folder")}用目录和标签整理</div><div class="welcome-feature">${icon("lock")}离线可用，数据保存在本机</div><div class="welcome-footer"><button class="full-button" data-action="start">开始记录 ${icon("right")}</button><p>无需登录 · 可稍后在设置中连接同步</p></div></div>`;
+      }
+      const renderers = {
+        today: todayPage,
+        inbox: listPage,
+        detail: editorPage,
+        folder: classificationPage,
+        trash: trashPage,
+        sync: syncPage,
+        settings: settingsPage,
+        onboarding: onboardingPage,
+      };
+      function renderChrome() {
+        const sub = ["detail", "trash", "sync"].includes(currentPage);
+        const nav = ["today", "inbox", "folder", "settings"].includes(currentPage);
+        let title = pages.find((p) => p[0] === currentPage)[1];
+        if (currentPage === "inbox") title = categoryFilter ? categoryFilter.name : "Todo 列表";
+        let actions =
+          currentPage === "today"
+            ? iconButton("search", "搜索 Todo", "search")
+            : currentPage === "inbox" && categoryFilter
+              ? iconButton("more", "管理当前分类", "manage-category")
+              : currentPage === "detail"
+                ? iconButton("more", "Todo 更多操作", "todo-more")
+                : currentPage === "sync"
+                  ? iconButton("more", "预览同步状态", "sync-states")
+                  : currentPage === "onboarding"
+                    ? '<button class="text-button" data-action="start">跳过</button>'
+                    : "";
+        document.getElementById("appbar").classList.toggle("subpage", sub);
+        document.getElementById("appbar").innerHTML =
+          currentPage === "onboarding"
+            ? `<h2>TaskTips</h2>${actions}`
+            : `${sub ? iconButton("back", "返回", "back") : ""}<h2>${esc(title)}</h2>${actions}`;
+        phone.classList.toggle("has-nav", nav);
+        document.getElementById("bottom-nav").hidden = !nav;
+        document
+          .querySelectorAll("#bottom-nav [data-page]")
+          .forEach((b) =>
+            b.setAttribute("aria-current", b.dataset.page === currentPage ? "page" : "false"),
+          );
+        const fab = ["today", "inbox"].includes(currentPage);
+        phone.classList.toggle("has-fab", fab);
+        document.getElementById("fab").hidden = !fab;
+        document.getElementById("editor-toolbar").hidden = currentPage !== "detail";
+        if (currentPage === "detail")
+          document.getElementById("editor-toolbar").innerHTML =
+            `${iconButton("format", "格式工具", "format")}${iconButton("image", "插入本地图片", "image")}<button class="text-button" data-action="complete-detail">${icon("check")}${selectedTodo().done ? "取消完成" : "标记完成"}</button>`;
+      }
+      function render() {
+        app.innerHTML = renderers[currentPage]();
+        renderChrome();
+        if (currentPage === "inbox") renderResults();
+        applyTheme();
+      }
+      function show(page) {
+        closeSheet(false);
+        currentPage = page;
+        if (page === "detail" && !selectedTodo()) selectedId = todos[0]?.id;
+        if (page === "detail" && !selectedTodo()) {
+          newTodo();
+          return;
+        }
+        render();
+        app.scrollTop = 0;
+        document
+          .querySelectorAll(".rail [data-page]")
+          .forEach((b) =>
+            b.setAttribute("aria-current", b.dataset.page === page ? "page" : "false"),
+          );
+        document.getElementById("page-select").value = page;
+        const p = pages.find((p) => p[0] === page);
+        document.getElementById("note-title").textContent = p[1] + " · " + p[3];
+        document.getElementById("note-copy").textContent = p[4];
+      }
+      function applyTheme() {
+        const resolved =
+          themeChoice === "system" ? (systemTheme.matches ? "dark" : "light") : themeChoice;
+        document.documentElement.dataset.theme = resolved;
+        document
+          .querySelectorAll("[data-theme-choice]")
+          .forEach((b) =>
+            b.setAttribute("aria-pressed", String(b.dataset.themeChoice === themeChoice)),
+          );
+        const styles = getComputedStyle(document.documentElement);
+        document.getElementById("brand-value").textContent = styles
+          .getPropertyValue("--brand")
+          .trim()
+          .toUpperCase();
+        document.getElementById("surface-value").textContent = styles
+          .getPropertyValue("--panel")
+          .trim()
+          .toUpperCase();
+        const d = document.getElementById("theme-description");
+        if (d)
+          d.textContent =
+            (themeChoice === "system" ? "跟随系统 · " : "") +
+            (resolved === "light" ? "浅色" : "深色");
+      }
+      function toast(text) {
+        clearTimeout(toastTimer);
+        const el = document.getElementById("snackbar");
+        el.textContent = text;
+        el.hidden = false;
+        toastTimer = setTimeout(() => {
+          el.hidden = true;
+        }, 2600);
+      }
+      function openSheet(title, body) {
+        modalReturnFocus = modal.hidden ? document.activeElement : modalReturnFocus;
+        modal.innerHTML = `<section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title"><div class="sheet-handle" aria-hidden="true"></div><header class="sheet-head"><h3 id="sheet-title">${title}</h3>${iconButton("close", "关闭面板", "close-sheet")}</header>${body}</section>`;
+        modal.hidden = false;
+        for (const el of phone.children) if (el !== modal && el.id !== "snackbar") el.inert = true;
+        modal.querySelector("button,input,select,textarea")?.focus({ preventScroll: true });
+      }
+      function closeSheet(restore = true) {
+        if (modal.hidden) return;
+        modal.hidden = true;
+        modal.innerHTML = "";
+        for (const el of phone.children) el.inert = false;
+        if (restore && modalReturnFocus?.isConnected)
+          modalReturnFocus.focus({ preventScroll: true });
+      }
+      function confirmAction(title, desc, label, callback, danger = false) {
+        pendingConfirm = callback;
+        openSheet(
+          title,
+          `<p class="sheet-copy">${desc}</p><div class="sheet-actions"><button data-action="close-sheet">取消</button><button class="confirm ${danger ? "danger" : ""}" data-action="confirm">${label}</button></div>`,
+        );
+      }
+      function optionsSheet(title, options, selected, action) {
+        openSheet(
+          title,
+          options
+            .map(
+              ([value, label]) =>
+                `<button class="sheet-option" data-option="${esc(value)}" data-option-action="${action}" aria-pressed="${String(value) === String(selected)}">${esc(label)}<span class="trailing">${String(value) === String(selected) ? icon("check") : ""}</span></button>`,
+            )
+            .join(""),
+        );
+      }
+      function editTodo(id) {
+        selectedId = Number(id);
+        returnPage = ["today", "inbox"].includes(currentPage) ? currentPage : "inbox";
+        show("detail");
+      }
+      function newTodo() {
+        const id = Math.max(0, ...todos.map((t) => t.id), ...trash.map((t) => t.id)) + 1;
+        todos.push({
+          id,
+          title: "未命名 Todo",
+          body: "",
+          folder: categoryFilter?.kind === "folder" ? categoryFilter.name : "",
+          tag: categoryFilter?.kind === "tag" ? categoryFilter.name : "",
+          priority: 0,
+          due: "",
+          done: false,
+        });
+        editTodo(id);
+        app.querySelector("[contenteditable]")?.focus();
+      }
+      function showTodoMenu(id) {
+        selectedId = Number(id);
+        const t = selectedTodo();
+        openSheet(
+          "Todo 操作",
+          `<p class="sheet-copy">${esc(t.title)}</p><button class="sheet-option" data-action="edit-selected">${icon("edit")}编辑 Todo</button><button class="sheet-option" data-action="toggle-selected">${icon("check")}${t.done ? "取消完成" : "标记完成"}</button><button class="sheet-option danger" data-action="delete-selected">${icon("trash")}移入回收站</button>`,
+        );
+      }
+      const actions = {
+        "close-sheet": () => closeSheet(),
+        confirm: () => {
+          const fn = pendingConfirm;
+          pendingConfirm = null;
+          closeSheet(false);
+          fn?.();
+        },
+        back: () => {
+          show(currentPage === "detail" ? returnPage : "settings");
+          app.focus({ preventScroll: true });
+        },
+        search: () => {
+          categoryFilter = null;
+          show("inbox");
+          document.getElementById("search-input").focus();
+        },
+        upcoming: () => {
+          listView = "upcoming";
+          categoryFilter = null;
+          show("inbox");
+        },
+        "new-todo": newTodo,
+        start: () => show("today"),
+        "clear-category": () => {
+          categoryFilter = null;
+          render();
+        },
+        "go-sync": () => show("sync"),
+        "go-trash": () => show("trash"),
+        filters: () =>
+          openSheet(
+            "筛选与排序",
+            `<label class="field">优先级<select id="priority-filter">${[
+              ["all", "全部优先级"],
+              ["3", "高"],
+              ["2", "中"],
+              ["1", "低"],
+              ["0", "无"],
+            ]
+              .map(
+                ([v, l]) =>
+                  `<option value="${v}" ${priorityFilter === v ? "selected" : ""}>${l}</option>`,
+              )
+              .join("")}</select></label><label class="field">排序<select id="sort-filter">${[
+              ["default", "默认排序"],
+              ["due", "截止日期"],
+              ["title", "标题"],
+            ]
+              .map(([v, l]) => `<option value="${v}" ${sort === v ? "selected" : ""}>${l}</option>`)
+              .join(
+                "",
+              )}</select></label><div class="sheet-actions"><button data-action="reset-filters">重置</button><button class="confirm" data-action="apply-filters">应用</button></div>`,
+          ),
+        "reset-filters": () => {
+          priorityFilter = "all";
+          sort = "default";
+          closeSheet(false);
+          render();
+        },
+        "apply-filters": () => {
+          priorityFilter = document.getElementById("priority-filter").value;
+          sort = document.getElementById("sort-filter").value;
+          closeSheet(false);
+          render();
+        },
+        priority: () =>
+          optionsSheet(
+            "优先级",
+            priorityNames.map((n, i) => [i, n + "优先级"]),
+            selectedTodo().priority,
+            "priority",
+          ),
+        date: () =>
+          openSheet(
+            "截止日期",
+            `<label class="field">选择日期<input id="due-date" type="date" value="${selectedTodo().due || today}" /></label><div class="sheet-actions"><button data-action="clear-date">清除</button><button class="confirm" data-action="save-date">完成</button></div>`,
+          ),
+        "clear-date": () => {
+          selectedTodo().due = "";
+          closeSheet(false);
+          render();
+        },
+        "save-date": () => {
+          selectedTodo().due = document.getElementById("due-date").value;
+          closeSheet(false);
+          render();
+        },
+        "pick-folder": () =>
+          optionsSheet(
+            "选择目录",
+            [["", "未分类"], ...folderNames.map((x) => [x, x])],
+            selectedTodo().folder,
+            "folder",
+          ),
+        "pick-tag": (reset = true) => {
+          if (reset) draftTags = [...todoTags(selectedTodo())];
+          const tags = draftTags;
+          openSheet(
+            "选择标签",
+            '<p class="sheet-copy">可选择多个标签。</p>' +
+              tagNames
+                .map(
+                  (name) =>
+                    '<button class="sheet-option" role="checkbox" aria-checked="' +
+                    tags.includes(name) +
+                    '" data-toggle-tag="' +
+                    esc(name) +
+                    '">' +
+                    esc(name) +
+                    '<span class="trailing">' +
+                    (tags.includes(name) ? icon("check") : "") +
+                    "</span></button>",
+                )
+                .join("") +
+              '<div class="sheet-actions"><button data-action="clear-tags">清除</button><button class="confirm" data-action="save-tags">完成</button></div>',
+          );
+        },
+        "clear-tags": () => {
+          draftTags = [];
+          actions["pick-tag"](false);
+        },
+        "save-tags": () => {
+          selectedTodo().tags = [...draftTags];
+          closeSheet(false);
+          render();
+        },
+        "complete-detail": () => {
+          selectedTodo().done = !selectedTodo().done;
+          render();
+          toast(selectedTodo().done ? "已标记完成" : "已恢复为未完成");
+        },
+        "todo-more": () => showTodoMenu(selectedId),
+        "edit-selected": () => {
+          closeSheet(false);
+          editTodo(selectedId);
+        },
+        "toggle-selected": () => {
+          selectedTodo().done = !selectedTodo().done;
+          closeSheet(false);
+          render();
+          toast("完成状态已更新");
+        },
+        "delete-selected": () => {
+          const t = selectedTodo();
+          confirmAction(
+            "移入回收站？",
+            `“${esc(t.title)}”可在 30 天内恢复。`,
+            "移入回收站",
+            () => {
+              todos = todos.filter((x) => x.id !== t.id);
+              trash.unshift({ ...t, remaining: 30 });
+              if (currentPage === "detail") show(returnPage);
+              else render();
+              toast("已移入回收站");
+            },
+            true,
+          );
+        },
+        "empty-trash": () =>
+          confirmAction(
+            "清空回收站？",
+            `将永久删除 ${trash.length} 项 Todo，无法恢复。`,
+            "清空",
+            () => {
+              trash = [];
+              render();
+              toast("回收站已清空");
+            },
+            true,
+          ),
+        theme: () =>
+          optionsSheet(
+            "主题",
+            [
+              ["system", "跟随系统"],
+              ["light", "浅色"],
+              ["dark", "深色"],
+            ],
+            themeChoice,
+            "theme",
+          ),
+        "new-category": () =>
+          openSheet(
+            `新建${categoryTab === "folder" ? "目录" : "标签"}`,
+            `<label class="field">名称<input id="category-name" maxlength="30" placeholder="输入名称" /></label><div class="sheet-actions"><button data-action="close-sheet">取消</button><button class="confirm" data-action="save-category">创建</button></div>`,
+          ),
+        "save-category": () => {
+          const name = document.getElementById("category-name").value.trim();
+          if (!name) {
+            toast("请填写名称");
+            return;
+          }
+          const target = categoryTab === "folder" ? folderNames : tagNames;
+          if (target.includes(name)) {
+            toast("这个名称已存在");
+            return;
+          }
+          target.push(name);
+          closeSheet(false);
+          render();
+        },
+        uncategorized: () => {
+          categoryFilter = { kind: "folder", name: "" };
+          listView = "all";
+          show("inbox");
+        },
+        "manage-category": () => {
+          openSheet(
+            "修改分类名称",
+            `<label class="field">名称<input id="rename-category" maxlength="30" value="${esc(categoryFilter.name)}" /></label><div class="sheet-actions"><button data-action="close-sheet">取消</button><button class="confirm" data-action="rename-category">保存</button></div>`,
+          );
+        },
+        "rename-category": () => {
+          const name = document.getElementById("rename-category").value.trim();
+          if (!name) {
+            toast("请填写名称");
+            return;
+          }
+          const target = categoryFilter.kind === "folder" ? folderNames : tagNames;
+          if (name !== categoryFilter.name && target.includes(name)) {
+            toast("这个名称已存在");
+            return;
+          }
+          const old = categoryFilter.name;
+          const i = target.indexOf(old);
+          if (i >= 0) target[i] = name;
+          for (const t of [...todos, ...trash]) {
+            if (categoryFilter.kind === "tag")
+              t.tags = todoTags(t).map((tag) => (tag === old ? name : tag));
+            else if (t.folder === old) t.folder = name;
+          }
+          categoryFilter.name = name;
+          closeSheet(false);
+          render();
+        },
+        "sync-now": () => {
+          syncState = "success";
+          render();
+          toast("演示：同步已完成");
+        },
+        "sync-states": () =>
+          optionsSheet(
+            "同步状态预览",
+            [
+              ["success", "同步完成"],
+              ["failed", "网络失败"],
+              ["conflict", "待处理冲突"],
+            ],
+            syncState,
+            "sync-state",
+          ),
+        "sync-config": () =>
+          openSheet(
+            "同步连接",
+            `<p class="sheet-copy">服务端连接示意。此设计稿不会登录或发送请求。</p><label class="field">服务端地址<input type="url" placeholder="https://sync.example.com" /></label><label class="field">登录邮箱<input type="email" placeholder="name@example.com" /></label><button class="full-button tonal" data-action="sync-config-done">完成预览</button>`,
+          ),
+        "sync-config-done": () => closeSheet(),
+        "sync-project": () =>
+          optionsSheet("选择项目", [["personal", "我的 Todo"]], "personal", "project"),
+        "auto-sync": () => {
+          autoSync = !autoSync;
+          render();
+          toast(autoSync ? "自动同步已开启" : "自动同步已关闭");
+        },
+        conflict: () =>
+          openSheet(
+            "选择保留的版本",
+            `<p class="sheet-copy">完成移动端页面评审</p><div class="trash-card"><h3>本机版本</h3><p>09:35 · 检查布局和控件尺寸</p></div><div class="trash-card"><h3>远端版本</h3><p>09:37 · 补充浅色与深色检查</p></div><div class="split-actions"><button class="full-button tonal" data-resolution="local">保留本机</button><button class="full-button tonal" data-resolution="remote">采用远端</button></div>`,
+          ),
+        storage: () =>
+          openSheet(
+            "本地存储",
+            `<p class="sheet-copy">Todo 内容、目录、标签和图片保存在本机。连接同步后可与其他设备交换内容。</p><button class="full-button tonal" data-action="close-sheet">知道了</button>`,
+          ),
+        about: () =>
+          openSheet(
+            "TaskTips",
+            `<p class="sheet-copy">本地优先的轻量 Todo 工具<br>版本 0.1.0</p><p class="sheet-copy">这是 Android UI 交互参考，尚未接入原生应用。内容仅用于体验页面布局。</p><button class="full-button tonal" data-action="close-sheet">知道了</button>`,
+          ),
+        format: () =>
+          openSheet(
+            "格式工具",
+            `<p class="sheet-copy">格式示意使用 Markdown 标记。</p>${[
+              ["heading", "标题", "# "],
+              ["bullet", "列表", "- "],
+              ["checklist", "任务清单", "- [ ] "],
+              ["quote", "引用", "> "],
+            ]
+              .map(
+                ([v, l]) =>
+                  `<button class="sheet-option" data-format="${v}">${icon(v === "checklist" ? "check" : "format")}${l}</button>`,
+              )
+              .join("")}`,
+          ),
+        image: () =>
+          openSheet(
+            "插入本地图片",
+            `<p class="sheet-copy">PNG、JPEG、GIF、WebP 或 BMP，单张不超过 10 MiB。以图片占位标识插入内容。</p><label class="field">选择图片<input id="local-image" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" /></label>`,
+          ),
+      };
+      document.addEventListener("click", (event) => {
+        const b = event.target.closest("button");
+        if (event.target === modal) {
+          closeSheet();
+          return;
+        }
+        if (!b || b.disabled) return;
+        if (b.dataset.themeChoice) {
+          themeChoice = b.dataset.themeChoice;
+          applyTheme();
+          return;
+        }
+        if (b.dataset.width) {
+          document.documentElement.style.setProperty("--device-width", b.dataset.width + "px");
+          document
+            .querySelectorAll("[data-width]")
+            .forEach((el) => el.setAttribute("aria-pressed", String(el === b)));
+          document.getElementById("frame-caption").textContent =
+            b.dataset.width + " × 844 逻辑尺寸 · 窄屏自动适配可用宽度";
+          return;
+        }
+        if (b.dataset.page) {
+          if (b.dataset.page === "inbox") categoryFilter = null;
+          show(b.dataset.page);
+          return;
+        }
+        if (b.dataset.open) {
+          editTodo(b.dataset.open);
+          return;
+        }
+        if (b.dataset.toggle) {
+          const t = todos.find((x) => x.id === Number(b.dataset.toggle));
+          t.done = !t.done;
+          render();
+          toast(t.done ? "已完成，可在“已完成”查看" : "已恢复为未完成");
+          return;
+        }
+        if (b.dataset.more) {
+          showTodoMenu(b.dataset.more);
+          return;
+        }
+        if (b.dataset.categoryTab) {
+          categoryTab = b.dataset.categoryTab;
+          render();
+          return;
+        }
+        if (b.dataset.categoryName) {
+          categoryFilter = { kind: categoryTab, name: b.dataset.categoryName };
+          listView = "open";
+          query = "";
+          priorityFilter = "all";
+          show("inbox");
+          return;
+        }
+        if (b.dataset.restore) {
+          const t = trash.find((t) => t.id === Number(b.dataset.restore));
+          trash = trash.filter((x) => x.id !== t.id);
+          todos.push(t);
+          render();
+          toast("已恢复到原目录");
+          return;
+        }
+        if (b.dataset.purge) {
+          const t = trash.find((t) => t.id === Number(b.dataset.purge));
+          confirmAction(
+            "彻底删除？",
+            `“${esc(t.title)}”将永久删除，无法恢复。`,
+            "彻底删除",
+            () => {
+              trash = trash.filter((x) => x.id !== t.id);
+              render();
+              toast("已彻底删除");
+            },
+            true,
+          );
+          return;
+        }
+        if (b.dataset.toggleTag) {
+          const name = b.dataset.toggleTag;
+          draftTags = draftTags.includes(name)
+            ? draftTags.filter((tag) => tag !== name)
+            : [...draftTags, name];
+          b.setAttribute("aria-checked", String(draftTags.includes(name)));
+          b.querySelector(".trailing").innerHTML = draftTags.includes(name) ? icon("check") : "";
+          return;
+        }
+        if (b.dataset.optionAction) {
+          const action = b.dataset.optionAction,
+            value = b.dataset.option;
+          if (action === "theme") themeChoice = value;
+          else if (action === "sync-state") syncState = value;
+          else if (action !== "project")
+            selectedTodo()[action] = action === "priority" ? Number(value) : value;
+          closeSheet(false);
+          render();
+          return;
+        }
+        if (b.dataset.resolution) {
+          confirmAction("采用这个版本？", "另一版本的恢复副本会保留。", "确认采用", () => {
+            syncState = "success";
+            render();
+            toast("冲突已处理");
+          });
+          return;
+        }
+        if (b.dataset.format) {
+          const prefix = { heading: "# ", bullet: "- ", checklist: "- [ ] ", quote: "> " }[
+            b.dataset.format
+          ];
+          selectedTodo().body += "\n" + prefix + "输入内容";
+          closeSheet(false);
+          render();
+          return;
+        }
+        actions[b.dataset.action]?.();
+      });
+      document.addEventListener("change", (event) => {
+        const el = event.target;
+        if (el.id === "page-select") {
+          show(el.value);
+        }
+        if (el.id === "view-select") {
+          listView = el.value;
+          renderResults();
+        }
+        if (el.id === "local-image" && el.files[0]) {
+          const file = el.files[0];
+          if (
+            !["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"].includes(
+              file.type,
+            ) ||
+            file.size > 10 * 1024 * 1024
+          ) {
+            toast("请选择不超过 10 MiB 的受支持图片");
+            return;
+          }
+          selectedTodo().body += "\n[图片：" + file.name + "]";
+          closeSheet(false);
+          render();
+          toast("已添加图片占位标识");
+        }
+      });
+      document.addEventListener("input", (event) => {
+        if (event.target.id === "search-input") {
+          query = event.target.value;
+          renderResults();
+        }
+        if (event.target.closest("#note-body")) {
+          const lines = document
+            .getElementById("note-body")
+            .innerText.replace(/\r/g, "")
+            .split("\n");
+          const firstLine = lines.findIndex((line) => line.trim());
+          const heading = firstLine < 0 ? "未命名 Todo" : lines.splice(0, firstLine + 1).at(-1);
+          selectedTodo().title = heading.replace(/^#+\s*/, "").slice(0, 80);
+          selectedTodo().body = lines.join("\n").trimStart();
+          document.getElementById("save-status").textContent = "已保存到本机";
+        }
+      });
+      // Paste plain text into the mock editor; never render pasted HTML or contact remote media.
+      document.addEventListener("paste", (event) => {
+        if (!event.target.closest("#note-body")) return;
+        event.preventDefault();
+        const text = event.clipboardData.getData("text/plain");
+        const selection = getSelection();
+        if (!selection.rangeCount) return;
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        const node = document.createTextNode(text);
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.getElementById("note-body").dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      document.addEventListener("keydown", (event) => {
+        if (modal.hidden) return;
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeSheet();
+        }
+        if (event.key === "Tab") {
+          const focusable = [
+            ...modal.querySelectorAll('button,input,select,textarea,[tabindex="0"]'),
+          ].filter((el) => !el.disabled);
+          const first = focusable[0],
+            last = focusable.at(-1);
+          if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }
+      });
+      systemTheme.addEventListener("change", () => {
+        if (themeChoice === "system") applyTheme();
+      });
+      document.getElementById("page-links").innerHTML = pages
+        .map(
+          ([id, label, i], index) =>
+            `<button data-page="${id}" aria-current="false">${icon(i)}${label}<small>${String(index + 1).padStart(2, "0")}</small></button>`,
+        )
+        .join("");
+      document.getElementById("page-select").innerHTML = pages
+        .map(([id, label]) => `<option value="${id}">${label}</option>`)
+        .join("");
+      document.getElementById("bottom-nav").innerHTML = pages
+        .filter((p) => ["today", "inbox", "folder", "settings"].includes(p[0]))
+        .map(
+          ([id, label, i]) =>
+            `<button data-page="${id}" aria-current="false"><span class="nav-icon">${icon(i)}</span><span>${id === "inbox" ? "列表" : id === "folder" ? "分类" : label}</span></button>`,
+        )
+        .join("");
+      document.getElementById("status-icons").innerHTML =
+        icon("signal") + icon("wifi") + icon("battery");
+      document.getElementById("fab").innerHTML = icon("plus");
+      new ResizeObserver(() => {
+        document.getElementById("frame-caption").textContent =
+          phone.clientWidth +
+          " × " +
+          phone.clientHeight +
+          " 逻辑尺寸 · 1 CSS px 对应 1 dp 的参考比例";
+      }).observe(phone);
+      show("today");
+    </script>
+  </body>
+</html>
