@@ -3,7 +3,9 @@
 ## Status
 - Flutter 工程（Android 优先）已建立；阶段1（本地闭环）已实现：主题/导航/8 页面、Markdown+front matter 本地存储、今日/列表/搜索/筛选/排序、编辑自动保存、目录标签管理、回收站 30 天。
 - 已验证通过的命令（2026-09-16，Flutter 3.47.4）：`flutter analyze`（0 error）、`flutter test`（25 通过）、`flutter build apk --debug`。
-- 阶段2（同步）/阶段3（分享、无障碍、发布检查）未实现；同步页当前为占位。
+- 阶段2（桌面互通）已实现：OpenAPI 生成的 Dart 客户端在 `packages/tasktips_api`（openapi-generator 7.25.0 + build_runner 产物，已 vendored）；登录/设备注册/项目选择、首次接入预览确认、bootstrap/pull/push（幂等 requestId 重试、SHA-256 payload 校验、10MiB 限额）、整对象冲突“保留本机/采用远端”、设备列表、本机同步日志（不含正文/凭据）、自动同步（启动/前台恢复/保存后/60s 前台检查）、token 串行刷新（refresh 入安全存储）、HTTPS 地址校验、Android 备份规则排除 state/。
+- 阶段3（分享入口、无障碍完善、WorkManager 后台、发布检查）未实现。
+- WorkManager 后台 15 分钟周期同步属阶段3；当前仅前台触发。
 
 ## Source of truth
 - `design/android-mobile-ui.html` (badge `v0.2`) is the only approved UI spec. `design/` is reference, never production UI.

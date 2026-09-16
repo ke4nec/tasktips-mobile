@@ -11,12 +11,16 @@ import '../domain/classification.dart';
 import '../domain/query.dart';
 import '../domain/todo.dart';
 import '../infra/store.dart';
+import '../sync/sync_engine.dart';
 
 enum ThemeModeSetting { system, light, dark }
 
 class AppModel extends ChangeNotifier {
   final TodoStore store;
   late final String deviceId;
+
+  /// 同步引擎；由 main 在 load() 后接入。
+  SyncEngine? sync;
 
   List<Todo> todos = [];
   Classification classification = Classification([], []);
@@ -61,6 +65,18 @@ class AppModel extends ChangeNotifier {
     _today = todayLocal();
     await purgeExpiredTrash();
     notifyListeners();
+  }
+
+  /// 本地修改保存后触发自动同步（如已开启）。
+  void scheduleAutoSync() {
+    final s = sync;
+    if (s != null &&
+        s.state.autoSync &&
+        s.status != SyncStatus.syncing &&
+        s.state.serverUrl != null &&
+        s.state.projectId != null) {
+      Future.microtask(() => s.syncNow());
+    }
   }
 
   Future<void> _saveSettings() =>
@@ -120,6 +136,7 @@ class AppModel extends ChangeNotifier {
     final i = todos.indexWhere((t) => t.id == updated.id);
     if (i >= 0) todos[i] = updated;
     notifyListeners();
+    scheduleAutoSync();
   }
 
   Future<void> setCompleted(String id, bool completed) async {

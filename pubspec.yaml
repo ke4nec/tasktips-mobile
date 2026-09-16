@@ -40,6 +40,11 @@ dependencies:
   path_provider: ^2.1.6
   yaml_writer: ^2.1.0
   path: ^1.9.1
+  tasktips_api:
+    path: packages/tasktips_api
+  flutter_secure_storage: ^9.2.2
+  crypto: ^3.0.7
+
 
 dev_dependencies:
   flutter_test:

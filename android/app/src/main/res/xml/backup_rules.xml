@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- state/ 含设备身份、同步基线与凭据引用，排除系统云备份与设备迁移；
+     正文是否参与云备份属待确认事项（设计文档 §6），当前保守保留 content/ 备份。 -->
+<full-backup-content>
+    <exclude domain="file" path="state" />
+</full-backup-content>

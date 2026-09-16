@@ -1,0 +1,12 @@
+analyzer:
+  errors:
+    unused_import: ignore
+    unused_element_parameter: ignore
+    unnecessary_import: ignore
+linter:
+  rules:
+    prefer_const_declarations: false
+    unnecessary_parenthesis: false
+    unnecessary_string_interpolations: false
+    prefer_final_locals: false
+    unawaited_futures: false

@@ -132,6 +132,20 @@ class TodoStore {
         const JsonEncoder.withIndent('  ').convert(c.toJson()));
   }
 
+  /// 供同步适配层从原始 JSON 字节构建分类/索引。
+  Classification classificationFromRawJson(String raw) =>
+      Classification.fromJson(
+          (jsonDecode(raw) as Map).cast<String, Object?>());
+
+  IndexData indexFromRawJson(String raw) =>
+      IndexData.fromJson((jsonDecode(raw) as Map).cast<String, Object?>());
+
+  static const _jsonEncoder = JsonEncoder.withIndent('  ');
+
+  String classificationJson(Classification c) => _jsonEncoder.convert(c.toJson());
+
+  String indexJson(IndexData i) => _jsonEncoder.convert(i.toJson());
+
   // ---------- index（自定义排序 + 墓碑） ----------
 
   Future<IndexData> loadIndex() async {
