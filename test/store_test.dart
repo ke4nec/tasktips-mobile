@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 
 import 'package:tasktips/app/app_model.dart';
 import 'package:tasktips/domain/todo.dart';
+import 'package:tasktips/domain/classification.dart';
 import 'package:tasktips/infra/store.dart';
 
 Todo _todo(String id, {String body = '正文', String? due}) => Todo(
@@ -107,7 +108,7 @@ void main() {
     final c = model.rootCategories.first;
     await model.trashCategory(c.id);
     final cat = model.classification.byId(c.id)!;
-    cat.deletedAt = DateTime.now().subtract(const Duration(days: 31));
+    cat.deletedAt = rfc3339Utc(DateTime.now().subtract(const Duration(days: 31)));
     final cv = model.classificationVersion;
     final iv = model.indexVersion;
     await model.purgeExpiredTrash();

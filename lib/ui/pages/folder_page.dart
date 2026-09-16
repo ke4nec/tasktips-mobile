@@ -374,8 +374,9 @@ class _FolderPageState extends State<FolderPage> {
 
   Future<void> _pickColor(BuildContext context,
       {required bool isCategory, required String id}) async {
+    // 桌面 32 色板中取 6 常用色（hex 值与桌面序列化一致）
     const palette = [
-      'blue', 'green', 'orange', 'purple', 'red', 'gray',
+      '#4a9eff', '#6ccb5f', '#fb923c', '#a78bfa', '#f97066', '#8a8a8a',
     ];
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -384,7 +385,7 @@ class _FolderPageState extends State<FolderPage> {
           children: [
             for (final c in palette)
               ListTile(
-                leading: const Icon(Icons.palette_outlined),
+                leading: Icon(Icons.circle, color: _parseHex(c)),
                 title: Text(c),
                 onTap: () => Navigator.pop(ctx, c),
               ),
@@ -405,6 +406,11 @@ class _FolderPageState extends State<FolderPage> {
       await widget.model.setTagColor(id, v);
     }
   }
+}
+
+Color _parseHex(String hex) {
+  final h = hex.replaceFirst('#', '');
+  return Color(int.parse('FF$h', radix: 16));
 }
 
 /// 目录筛选 Todo 列表（含子目录）；FAB 新建继承目录。

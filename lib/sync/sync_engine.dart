@@ -401,6 +401,12 @@ class SyncEngine extends ChangeNotifier {
         final f = File('${model.store.tipsDir.path}/$id.md');
         if (await f.exists()) await f.delete();
         model.todos.removeWhere((t) => t.id == id);
+      } else if (kind == 'image') {
+        final ext = _imageExtFor(id);
+        if (ext != null) {
+          final f = File('${model.store.imagesDir.path}/$id${id.contains('.') ? '' : '.$ext'}');
+          if (await f.exists()) await f.delete();
+        }
       }
       state.baselines[key] =
           ObjectBaseline(kind, id, (m['revision'] as num).toInt(), null);
@@ -458,6 +464,22 @@ class SyncEngine extends ChangeNotifier {
 
   Future<void> _writeRemoteObject(String kind, String id, Uint8List bytes,
       {bool notify = true}) async {
+    // image 是二进制对象：不做文本解码（utf8.decode 会抛 FormatException
+    // 中断整页 pull），校验哈希后直接落盘。
+    if (kind == 'image') {
+      final ext = _imageExtFor(id);
+      if (ext == null) {
+        // 无法确定扩展名的 image 对象：跳过并记录，不中断同步
+        _log('download', 1, 'skipped', 'IMAGE_NAME_UNKNOWN');
+        return;
+      }
+      final f = File('${model.store.imagesDir.path}/$id.$ext');
+      final tmp = File('${f.path}.tmp');
+      await tmp.writeAsBytes(bytes, flush: true);
+      await tmp.rename(f.path);
+      if (notify) model.notifyListeners();
+      return;
+    }
     final text = utf8.decode(bytes);
     switch (kind) {
       case 'todo':
@@ -484,6 +506,24 @@ class SyncEngine extends ChangeNotifier {
         break;
     }
     if (notify) model.notifyListeners();
+  }
+
+  /// image 对象 id 形如 `<ulid>.<ext>`；若 id 为主名（无扩展名），
+  /// 则在 images/ 中查找以 `<id>.` 开头的现有文件。
+  String? _imageExtFor(String id) {
+    final dot = id.lastIndexOf('.');
+    if (dot > 0 && dot < id.length - 1) {
+      final ext = id.substring(dot + 1).toLowerCase();
+      if (const {'png', 'jpg', 'gif', 'webp', 'bmp'}.contains(ext)) return ext;
+      return null; // 带点但扩展名不合法：不猜
+    }
+    try {
+      for (final e in model.store.imagesDir.listSync()) {
+        final name = e.uri.pathSegments.last;
+        if (name.startsWith('$id.')) return name.substring(id.length + 1);
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ---------- pull ----------

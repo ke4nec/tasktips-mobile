@@ -41,12 +41,14 @@ class AppModel extends ChangeNotifier {
   Map<String, Todo>? _byIdCache;
   Map<String, int>? _countByCategory;
   Map<String, Set<String>>? _subtreeCache;
+  Set<String>? _activeCategoryIdsCache;
 
   @override
   void notifyListeners() {
     _byIdCache = null;
     _countByCategory = null;
     _subtreeCache = null;
+    _activeCategoryIdsCache = null;
     super.notifyListeners();
   }
 
@@ -207,9 +209,20 @@ class AppModel extends ChangeNotifier {
   List<Tag> get trashedTags =>
       classification.tags.where((t) => t.isDeleted).toList();
 
-  int remainingDays(DateTime deletedAt) {
-    final expiry =
-        deletedAt.add(const Duration(days: TodoStore.retentionDays));
+  static String _normalizeColorValue(String c) =>
+      const {'blue': '#4a9eff', 'green': '#6ccb5f', 'orange': '#fb923c',
+            'purple': '#a78bfa', 'red': '#f97066', 'gray': '#8a8a8a'}[c.toLowerCase()] ?? c;
+
+  static bool _isBefore(String? rfc3339, DateTime cutoff) =>
+      (tryParseRfc3339(rfc3339) ?? DateTime.now()).isBefore(cutoff);
+
+  /// deletedAt 接受 RFC3339 字符串（分类实体）或 DateTime（Todo）。
+  int remainingDays(Object deletedAt) {
+    final d = (deletedAt is DateTime
+            ? deletedAt
+            : DateTime.tryParse(deletedAt as String))!
+        .toLocal();
+    final expiry = d.add(const Duration(days: TodoStore.retentionDays));
     final left = expiry.difference(DateTime.now()).inDays + 1;
     return left.clamp(0, TodoStore.retentionDays);
   }
@@ -234,10 +247,10 @@ class AppModel extends ChangeNotifier {
     // index.json 只在批量墓碑写完后落盘一次，避免逐条全量重写
     if (expiredTodos.isNotEmpty) await store.saveIndex(index);
     final expiredCats = classification.categories
-        .where((c) => c.isDeleted && c.deletedAt!.isBefore(cutoff))
+        .where((c) => c.isDeleted && _isBefore(c.deletedAt, cutoff))
         .toList();
     final expiredTags = classification.tags
-        .where((t) => t.isDeleted && t.deletedAt!.isBefore(cutoff))
+        .where((t) => t.isDeleted && _isBefore(t.deletedAt, cutoff))
         .toList();
     if (expiredCats.isNotEmpty || expiredTags.isNotEmpty) {
       classification.categories.removeWhere(expiredCats.contains);
@@ -274,7 +287,14 @@ class AppModel extends ChangeNotifier {
 
   // ---------- 查询 ----------
 
-  List<Todo> query(TodoQuery q) => runQuery(todos, q, today: today);
+  List<Todo> query(TodoQuery q) => runQuery(todos, q,
+      today: today,
+      activeCategoryIds: _activeCategoryIds(),
+      customOrder: index.customOrder);
+
+  /// 当前未删除目录 ID 集：categoryId 指向其外的 Todo 按未分类口径处理。
+  Set<String> _activeCategoryIds() => _activeCategoryIdsCache ??=
+      classification.categories.where((c) => !c.isDeleted).map((c) => c.id).toSet();
 
   /// 展开子目录后的目录筛选 ID 集。
   Set<String> expandCategoryIds(String rootId) =>
@@ -344,7 +364,8 @@ class AppModel extends ChangeNotifier {
   Future<void> setCategoryColor(String id, String? color) async {
     final c = classification.byId(id);
     if (c == null) return;
-    c.color = (color == null || color.isEmpty) ? null : color;
+    c.color = (color == null || color.isEmpty) ? kDefaultColor : _normalizeColorValue(color);
+    c.updatedAt = rfc3339Utc(DateTime.now().toUtc());
     await _saveClassification();
   }
 
@@ -353,7 +374,10 @@ class AppModel extends ChangeNotifier {
     final tree = classification.subtreeOf(id);
     final now = DateTime.now().toUtc();
     for (final c in classification.categories) {
-      if (tree.contains(c.id) && !c.isDeleted) c.deletedAt = now;
+      if (tree.contains(c.id) && !c.isDeleted) {
+        c.deletedAt = rfc3339Utc(now);
+        c.updatedAt = rfc3339Utc(now);
+      }
     }
     await _saveClassification();
   }
@@ -423,7 +447,8 @@ class AppModel extends ChangeNotifier {
   Future<void> setTagColor(String id, String? color) async {
     final t = classification.tagById(id);
     if (t == null) return;
-    t.color = (color == null || color.isEmpty) ? null : color;
+    t.color = (color == null || color.isEmpty) ? kDefaultColor : _normalizeColorValue(color);
+    t.updatedAt = rfc3339Utc(DateTime.now().toUtc());
     await _saveClassification();
   }
 
@@ -431,7 +456,8 @@ class AppModel extends ChangeNotifier {
   Future<void> trashTag(String id) async {
     final t = classification.tagById(id);
     if (t == null) return;
-    t.deletedAt = DateTime.now().toUtc();
+    t.deletedAt = rfc3339Utc(DateTime.now().toUtc());
+    t.updatedAt = t.deletedAt!;
     await _saveClassification();
   }
 

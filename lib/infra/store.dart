@@ -117,8 +117,9 @@ class TodoStore {
     final f = classificationFile;
     if (!await f.exists()) return Classification([], []);
     try {
-      final j = jsonDecode(await f.readAsString()) as Map<String, Object?>;
-      return Classification.fromJson(j);
+      final raw = await f.readAsString();
+      return Classification.fromJson(
+          (jsonDecode(raw) as Map).cast<String, Object?>(), raw: raw);
     } catch (_) {
       // 损坏时备份原件并返回空，避免阻断启动
       await _keepRecoveryCopy('classification.json', f);
@@ -126,16 +127,24 @@ class TodoStore {
     }
   }
 
+  /// 未修改时按原文写回（与桌面端 pretty 序列化逐字节一致的保障）。
   Future<void> saveClassification(Classification c) async {
-    await _atomicWriteString(
-        classificationFile,
-        const JsonEncoder.withIndent('  ').convert(c.toJson()));
+    if (!c.dirty && c.rawJson != null) {
+      await _atomicWriteString(classificationFile, c.rawJson!);
+      return;
+    }
+    final text = const JsonEncoder.withIndent('  ').convert(c.toJson());
+    await _atomicWriteString(classificationFile, text);
+    c
+      ..rawJson = text
+      ..dirty = false;
   }
 
   /// 供同步适配层从原始 JSON 字节构建分类/索引。
   Classification classificationFromRawJson(String raw) =>
       Classification.fromJson(
-          (jsonDecode(raw) as Map).cast<String, Object?>());
+          (jsonDecode(raw) as Map).cast<String, Object?>(),
+          raw: raw);
 
   IndexData indexFromRawJson(String raw) =>
       IndexData.fromJson((jsonDecode(raw) as Map).cast<String, Object?>());

@@ -160,7 +160,7 @@ class _TrashPageState extends State<TrashPage> {
           ),
           title: t.title.isEmpty ? '未命名 Todo' : t.title,
           subtitle:
-              '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · ${m.classification.categoryPath(t.categoryId)}',
+              '删除于 ${_localTs(t.deletedAt!)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · ${m.classification.categoryPath(t.categoryId)}',
           onRestore: () => m.restoreTodo(t.id),
           onPurge: () async {
             final ok = await confirmDialog(context,
@@ -189,7 +189,7 @@ class _TrashPageState extends State<TrashPage> {
           leading: const Icon(Icons.folder_delete_outlined, size: 20),
           title: m.classification.categoryPath(c.id),
           subtitle:
-              '删除于 ${c.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(c.deletedAt!)} 天',
+              '删除于 ${_localTs(c.deletedAt!)} · 剩余 ${m.remainingDays(c.deletedAt!)} 天',
           onRestore: () async {
             await m.restoreCategory(c.id);
             if (context.mounted) {
@@ -224,7 +224,7 @@ class _TrashPageState extends State<TrashPage> {
           leading: const Icon(Icons.tag, size: 20),
           title: t.name,
           subtitle:
-              '删除于 ${t.deletedAt!.toLocal().toString().substring(0, 16)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · 关联 ${m.todos.where((e) => e.tags.contains(t.name)).length} 条',
+              '删除于 ${_localTs(t.deletedAt!)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · 关联 ${m.todos.where((e) => e.tags.contains(t.name)).length} 条',
           onRestore: () async {
             await m.restoreTag(t.id);
             if (context.mounted) {
@@ -247,4 +247,9 @@ class _TrashPageState extends State<TrashPage> {
   }
 
   Widget _empty() => const EmptyState(icon: Icons.delete_outline, title: '回收站为空');
+
+  static String _localTs(Object ts) {
+    final d = ts is DateTime ? ts : DateTime.tryParse(ts as String);
+    return (d ?? DateTime.now()).toLocal().toString().substring(0, 16);
+  }
 }

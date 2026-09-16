@@ -16,7 +16,10 @@ void main() {
     expect(t.endsWith('…'), isTrue);
   });
 
-  testWidgets('空正文返回空标题', (tester) async {
-    expect(deriveTitle('#\n##\n'), '');
+  testWidgets('标记行跳过与空正文返回空标题', (tester) async {
+    // 与桌面 markdown.ts 一致：裸 #（井号后无空格）不是 ATX 标题，保留为文本
+    expect(deriveTitle('#\n##\n'), '#');
+    expect(deriveTitle(''), '');
+    expect(deriveTitle('---\n***\n'), '');
   });
 }

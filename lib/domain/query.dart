@@ -75,12 +75,20 @@ String _stripToPlainText(String md) =>
     md.replaceAll(_codeBlockRe, ' ').replaceAll(_markerRe, ' ');
 
 /// 过滤 + 排序。today 由调用方传入以便测试跨日场景。
+/// [activeCategoryIds] 为当前未删除目录 ID 集：categoryId 指向不存在或
+/// 已删除目录的 Todo 按"未分类"口径参与筛选与计数。
 List<Todo> runQuery(
   List<Todo> todos,
   TodoQuery q, {
   required String today,
   Set<String>? includeOnly, // 测试/详情跳转用
+  Set<String>? activeCategoryIds,
+  Map<String, List<String>>? customOrder, // 桌面端同步来的 Inbox/All 自定义顺序
 }) {
+  bool uncategorized(Todo t) =>
+      t.categoryId == null ||
+      t.categoryId!.isEmpty ||
+      (activeCategoryIds != null && !activeCategoryIds.contains(t.categoryId));
   final search = q.search?.trim().toLowerCase();
   Iterable<Todo> it = todos.where((t) => _matchesView(t, q.view, today));
   if (includeOnly != null) it = it.where((t) => includeOnly.contains(t.id));
@@ -106,7 +114,7 @@ List<Todo> runQuery(
         : q.categoryIds!.contains(t.categoryId));
   }
   if (q.uncategorized) {
-    it = it.where((t) => t.categoryId == null || t.categoryId!.isEmpty);
+    it = it.where(uncategorized);
   }
   if (q.dueFrom != null) {
     it = it.where((t) => t.dueDate != null && t.dueDate!.compareTo(q.dueFrom!) >= 0);
@@ -158,6 +166,28 @@ List<Todo> runQuery(
       }
       return d * mul;
     });
+  }
+  // 已同步的 Inbox/All 自定义顺序：默认排序且无筛选/搜索时生效，
+  // 数组内 ID 按数组相对顺序排前（优先于过期/优先级等默认键），其余按默认规则追加
+  if (q.defaultSort && !q.hasActiveFilter) {
+    final key = switch (q.view) {
+      TodoView.inbox => 'inbox',
+      TodoView.all => 'all',
+      _ => null,
+    };
+    final order = key == null ? null : customOrder?[key];
+    if (order != null && order.isNotEmpty) {
+      final rank = <String, int>{
+        for (var i = 0; i < order.length; i++) order[i]: i
+      };
+      final pinned = <Todo>[];
+      final rest = <Todo>[];
+      for (final t in list) {
+        (rank.containsKey(t.id) ? pinned : rest).add(t);
+      }
+      pinned.sort((a, b) => rank[a.id]!.compareTo(rank[b.id]!));
+      return [...pinned, ...rest];
+    }
   }
   return list;
 }

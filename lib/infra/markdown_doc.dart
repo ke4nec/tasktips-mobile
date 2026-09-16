@@ -30,7 +30,9 @@ class ParsedDoc {
 
 /// 解析 `---\n...\n---\n` front matter。解析失败抛 [FrontMatterException]。
 ParsedDoc parseTodoDoc(String text) {
-  final normalized = text.replaceAll('\r\n', '\n');
+  // 读取兼容 CRLF 与孤立 \r（与桌面端 markdown.rs 归一规则一致），保存统一 LF
+  final normalized =
+      text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
   if (!normalized.startsWith('---\n')) {
     throw FrontMatterException('缺少 front matter 起始标记');
   }
@@ -76,6 +78,11 @@ Todo todoFromFields(Map<String, Object?> f, String body) {
   if (status != 'open' && status != 'completed') {
     throw FrontMatterException('非法 status: $status');
   }
+  final priority = (f['priority'] as int?) ?? 0;
+  if (priority < 0 || priority > 3) {
+    // 与桌面端 TodoTip::validate 一致：优先级只允许 0-3
+    throw FrontMatterException('非法 priority: $priority');
+  }
   final known = {
     'schemaVersion', 'id', 'title', 'status', 'priority', 'tags',
     'dueDate', 'categoryId', 'deletedAt', 'createdAt', 'updatedAt',
@@ -90,7 +97,7 @@ Todo todoFromFields(Map<String, Object?> f, String body) {
     title: (f['title'] as String?) ?? '',
     body: body,
     status: status == 'completed' ? TodoStatus.completed : TodoStatus.open,
-    priority: (f['priority'] as int?) ?? 0,
+    priority: priority,
     tags: ((f['tags'] as List?) ?? []).map((e) => e.toString()).toList(),
     dueDate: _optStr(f['dueDate']),
     categoryId: _optStr(f['categoryId']),

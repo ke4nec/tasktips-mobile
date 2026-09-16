@@ -56,11 +56,13 @@ class ConflictRecord {
   final int localRevision;
   final int remoteRevision;
   final String? remoteContentHash;
+  /// 远端版本是删除（墓碑）时为 true：面板需标示“此版本为删除”。
+  final bool remoteDeleted;
   bool resolved;
 
   ConflictRecord(this.kind, this.id, this.localRevision, this.remoteRevision,
       this.remoteContentHash,
-      {this.resolved = false});
+      {this.remoteDeleted = false, this.resolved = false});
 
   Map<String, Object?> toJson() => {
         'kind': kind,
@@ -68,6 +70,7 @@ class ConflictRecord {
         'localRevision': localRevision,
         'remoteRevision': remoteRevision,
         'remoteContentHash': remoteContentHash,
+        'remoteDeleted': remoteDeleted,
         'resolved': resolved,
       };
 
@@ -77,7 +80,26 @@ class ConflictRecord {
       (j['localRevision'] as num).toInt(),
       (j['remoteRevision'] as num).toInt(),
       j['remoteContentHash'] as String?,
+      remoteDeleted: j['remoteDeleted'] == true,
       resolved: j['resolved'] == true);
+}
+
+/// 被服务端拒绝的对象：记录错误码与当时 revision/hash，
+/// 本地版本未变化前不再重试（校验失败停止重试该对象）。
+class RejectedRecord {
+  final String code;
+  final int revision; // 分类/索引等无 revision 的对象以 -1 表示
+  final String? contentHash;
+
+  RejectedRecord(this.code, this.revision, this.contentHash);
+
+  Map<String, Object?> toJson() =>
+      {'code': code, 'revision': revision, if (contentHash != null) 'contentHash': contentHash};
+
+  static RejectedRecord fromJson(Map<String, Object?> j) => RejectedRecord(
+      j['code'] as String,
+      (j['revision'] as num?)?.toInt() ?? -1,
+      j['contentHash'] as String?);
 }
 
 /// 本机同步日志：仅时间、方向、数量、结果与错误码，不含正文/凭据。
@@ -117,6 +139,10 @@ class SyncStateData {
   PendingPush? pendingPush;
   final List<ConflictRecord> conflicts = [];
   final List<SyncLogEntry> logs = [];
+  /// 被拒绝对象（key → 记录）：本地未变化前不再重试。
+  final Map<String, RejectedRecord> rejected = {};
+  /// 登录失效/设备撤销/项目维护时暂停自动提交，存错误码；手动同步不受限。
+  String? submitPaused;
   bool autoSync = false;
   bool bootstrapped = false;
 
@@ -132,6 +158,8 @@ class SyncStateData {
         'pendingPush': pendingPush?.toJson(),
         'conflicts': conflicts.map((c) => c.toJson()).toList(),
         'logs': logs.map((l) => l.toJson()).toList(),
+        'rejected': rejected.map((k, v) => MapEntry(k, v.toJson())),
+        'submitPaused': submitPaused,
         'autoSync': autoSync,
         'bootstrapped': bootstrapped,
       };
@@ -157,6 +185,11 @@ class SyncStateData {
         .map((e) => SyncLogEntry.fromJson((e as Map).cast<String, Object?>())));
     s.autoSync = j['autoSync'] == true;
     s.bootstrapped = j['bootstrapped'] == true;
+    ((j['rejected'] as Map?) ?? {}).forEach((k, v) {
+      s.rejected[k as String] =
+          RejectedRecord.fromJson((v as Map).cast<String, Object?>());
+    });
+    s.submitPaused = j['submitPaused'] as String?;
     return s;
   }
 

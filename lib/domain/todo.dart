@@ -113,33 +113,74 @@ class Todo {
       );
 }
 
-/// 标题派生：取首个非空、且并非只由 Markdown 标记构成的行，
-/// 剥离标记后按 Unicode 码点截断到 80（超出取 79 码点 + …）。
+/// 派生标题的最大字符数（码点）：仅控制列表/标题栏展示宽度。
+const int kDerivedTitleMaxChars = 80;
+
+const int _maxLinesScanned = 50;
+
+final _hrRe = RegExp(r'^ {0,3}(?:[-*_][ \t]*){3,}$');
+final _brRe = RegExp(r'\\?<br\s*/?>', caseSensitive: false);
+final _atxRe = RegExp(r'^#{1,6}\s+([^\s].*?)(?:\s+#{1,6})?\s*$');
+final _quoteRe = RegExp(r'^>\s?');
+final _taskBulletRe = RegExp(r'^[-*+]\s+\[[ xX]\]\s+');
+final _bulletRe = RegExp(r'^[-*+]\s+');
+final _taskOrderedRe = RegExp(r'^\d+[.)]\s+\[[ xX]\]\s+');
+final _orderedRe = RegExp(r'^\d+[.)]\s+');
+final _imgRe = RegExp(r'!\[([^\]]*)\]\([^)]*\)');
+final _linkRe = RegExp(r'\[([^\]]*)\]\([^)]*\)');
+final _boldItalicRe = RegExp(r'\*\*\*(.+?)\*\*\*');
+final _boldRe = RegExp(r'\*\*(.+?)\*\*');
+final _italicRe = RegExp(r'\*(.+?)\*');
+final _strikeRe = RegExp(r'~~(.+?)~~');
+final _codeRe = RegExp(r'`([^`]*)`');
+// 下划线强调只在两侧不紧邻单词字符时视为标记（保留 snake_case）
+final _underscoreRe = RegExp(r'(^|[^\w])_{1,3}([^_]+?)_{1,3}(?=[^\w]|$)');
+
+/// 剥离单行 Markdown 标记，返回纯文本；规则与桌面端 markdown.ts 一致：
+/// 分隔线/`<br>` 残留视为无文本；块级前缀（标题/引用/任务/列表，可叠加）
+/// 循环剥离；行内强调/代码/链接与图片保留可见文本。
+String stripMarkdown(String line) {
+  var text = line.trim();
+  if (_hrRe.hasMatch(text)) return '';
+  text = text.replaceAll(_brRe, '');
+  for (;;) {
+    final next = text
+        .replaceFirstMapped(_atxRe, (m) => m.group(1) ?? '')
+        .replaceFirst(_quoteRe, '')
+        .replaceFirst(_taskBulletRe, '')
+        .replaceFirst(_bulletRe, '')
+        .replaceFirst(_taskOrderedRe, '')
+        .replaceFirst(_orderedRe, '');
+    if (next == text) break;
+    text = next;
+  }
+  text = text
+      .replaceAllMapped(_imgRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_linkRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_boldItalicRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_boldRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_italicRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_strikeRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(_codeRe, (m) => m.group(1) ?? '')
+      .replaceAllMapped(
+          _underscoreRe, (m) => '${m.group(1)}${m.group(2)}');
+  return text.trim();
+}
+
+/// 标题派生（设计文档 4.2）：取正文首个非空行（至多扫描 50 行），
+/// 剥离 Markdown 标记后按 Unicode 码点截断到 80（超出取 79 码点 + …）。
 String deriveTitle(String body) {
-  for (final rawLine in body.split('\n')) {
-    final line = rawLine.trim();
-    if (line.isEmpty) continue;
-    var t = line;
-    // 剥离常见行首标记
-    t = t.replaceFirst(RegExp(r'^#{1,6}\s+'), '');
-    t = t.replaceFirst(RegExp(r'^[-*+]\s+\[[ xX]\]\s*'), '');
-    t = t.replaceFirst(RegExp(r'^[-*+]\s+'), '');
-    t = t.replaceFirst(RegExp(r'^\d+[.)]\s+'), '');
-    t = t.replaceFirst(RegExp(r'^>\s*'), '');
-    if (t.trim().replaceAll(RegExp(r'[*_`~#>\[\]()!-]'), '').isEmpty) continue;
-    String stripMarks(String input, RegExp re) => input
-        .replaceAllMapped(re, (m) => m.group(1) ?? '');
-    t = stripMarks(t, RegExp(r'\*\*(.+?)\*\*'));
-    t = stripMarks(t, RegExp(r'__(.+?)__'));
-    t = stripMarks(t, RegExp(r'(?<!\*)\*(?<!\*\*)([^*]+?)\*(?!\*)'));
-    t = stripMarks(t, RegExp(r'(?<!_)_([^_]+?)_(?!_)'));
-    t = stripMarks(t, RegExp(r'~~(.+?)~~'));
-    t = t.replaceAll('`', '');
-    t = t.trim();
-    if (t.isEmpty) continue;
-    final runes = t.runes.toList();
-    if (runes.length <= 80) return t;
-    return '${String.fromCharCodes(runes.take(79))}…';
+  var count = 0;
+  for (final line in body.split(RegExp(r'\r?\n'))) {
+    if (count >= _maxLinesScanned) break;
+    count += 1;
+    if (line.trim().isEmpty) continue;
+    final text = stripMarkdown(line);
+    // 行内只有标记（分隔线、<br> 残留等）时继续向后找真正的文本行
+    if (text.isEmpty) continue;
+    final runes = text.runes.toList();
+    if (runes.length <= kDerivedTitleMaxChars) return text;
+    return '${String.fromCharCodes(runes.take(kDerivedTitleMaxChars - 1))}…';
   }
   return '';
 }
