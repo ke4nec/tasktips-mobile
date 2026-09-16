@@ -11,6 +11,9 @@ import 'pages/today_page.dart';
 import 'pages/trash_page.dart';
 import 'theme.dart';
 
+/// 全局导航键：分享入口等服务级跳转使用。
+final navigatorKey = GlobalKey<NavigatorState>();
+
 class TaskTipsApp extends StatelessWidget {
   final AppModel model;
   const TaskTipsApp({super.key, required this.model});
@@ -20,6 +23,7 @@ class TaskTipsApp extends StatelessWidget {
     return AnimatedBuilder(
       animation: model,
       builder: (context, _) => MaterialApp(
+        navigatorKey: navigatorKey,
         title: 'TaskTips',
         theme: buildTheme(Brightness.light),
         darkTheme: buildTheme(Brightness.dark),

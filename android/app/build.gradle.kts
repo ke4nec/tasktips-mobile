@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "dev.tasktips.tasktips"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

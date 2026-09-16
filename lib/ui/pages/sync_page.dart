@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:tasktips_api/tasktips_api.dart' as api;
+import 'package:workmanager/workmanager.dart';
 
 import '../../app/app_model.dart';
 import '../../sync/sync_engine.dart';
@@ -258,9 +259,21 @@ class _SyncPageState extends State<SyncPage> {
         const SizedBox(height: 8),
         SwitchListTile(
           title: const Text('自动同步'),
-          subtitle: const Text('启动、恢复前台、网络恢复与保存后触发；前台每 60 秒检查'),
+          subtitle: const Text('启动、恢复前台、网络恢复与保存后触发；前台每 60 秒检查；'
+              '后台 15 分钟周期任务由系统调度，不承诺准点执行'),
           value: sync.state.autoSync,
-          onChanged: sync.setAutoSync,
+          onChanged: (v) async {
+            await sync.setAutoSync(v);
+            if (v) {
+              await Workmanager().registerPeriodicTask(
+                'tasktips-sync', 'tasktipsPeriodicSync',
+                frequency: const Duration(minutes: 15),
+                existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+              );
+            } else {
+              await Workmanager().cancelByUniqueName('tasktips-sync');
+            }
+          },
         ),
         if (unresolved.isNotEmpty) ...[
           const SizedBox(height: 8),
