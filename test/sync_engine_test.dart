@@ -3,6 +3,7 @@
 /// rejected/lock/退避/认证分流/待同步口径。
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -29,11 +30,11 @@ class FakeSecureStorage extends FlutterSecureStorage {
   @override
   Future<String?> read({
     required String key,
-    IOSOptions? iOptions,
+    AppleOptions? iOptions,
     AndroidOptions? aOptions,
     LinuxOptions? lOptions,
     WebOptions? webOptions,
-    MacOsOptions? mOptions,
+    AppleOptions? mOptions,
     WindowsOptions? wOptions,
   }) async =>
       map[key];
@@ -42,11 +43,11 @@ class FakeSecureStorage extends FlutterSecureStorage {
   Future<void> write({
     required String key,
     required String? value,
-    IOSOptions? iOptions,
+    AppleOptions? iOptions,
     AndroidOptions? aOptions,
     LinuxOptions? lOptions,
     WebOptions? webOptions,
-    MacOsOptions? mOptions,
+    AppleOptions? mOptions,
     WindowsOptions? wOptions,
   }) async {
     if (value == null) {
@@ -59,11 +60,11 @@ class FakeSecureStorage extends FlutterSecureStorage {
   @override
   Future<void> delete({
     required String key,
-    IOSOptions? iOptions,
+    AppleOptions? iOptions,
     AndroidOptions? aOptions,
     LinuxOptions? lOptions,
     WebOptions? webOptions,
-    MacOsOptions? mOptions,
+    AppleOptions? mOptions,
     WindowsOptions? wOptions,
   }) async {
     map.remove(key);
@@ -116,6 +117,7 @@ class StubServer {
   int puts = 0;
   int gets = 0;
   final List<String?> pushRequestIds = [];
+  Map<String, Object?>? lastPushBody;
 
   api.BootstrapResponse Function()? onBootstrap;
   api.PullResponse Function()? onPull;
@@ -143,6 +145,7 @@ class StubServer {
         pushes++;
         if (o.data is Map) {
           pushRequestIds.add((o.data as Map)['requestId']?.toString());
+          lastPushBody = (o.data as Map).cast<String, Object?>();
         } else {
           pushRequestIds.add(null);
         }
@@ -217,6 +220,23 @@ DioException _dioError(int status, [Object? code]) => DioException(
           data: code == null ? null : {'code': code}),
       type: DioExceptionType.badResponse,
     );
+
+api.SyncChange _tombstoneChange(
+    {required String kind, required String id, required int revision}) {
+  final inner = api.SyncTombstoneChange((b) => b
+    ..type = JsonObject('tombstone')
+    ..kind = api.ObjectKind.valueOf(kind)
+    ..id = id
+    ..revision = revision
+    ..deletedAt = DateTime.utc(2026, 9, 1, 8)
+    ..deviceId = 'desktop-dev'
+    ..changeSequence = 9);
+  return api.SyncChange((b) => b.oneOf = OneOfDynamic(
+        typeIndex: 1,
+        types: [api.SyncObjectChange, api.SyncTombstoneChange],
+        value: inner,
+      ));
+}
 
 void main() {
   group('线格式回归（服务端契约 const 辨别器）', () {
@@ -627,6 +647,113 @@ void main() {
           snapshotId: 's1', targetChangeSequence: 5, reason: '测试');
       expect(job2, isNull);
       expect(err2, '按快照与按时间点两种模式二选一');
+    });
+  });
+
+  group('index 墓碑合并与收敛（对齐桌面协议）', () {
+    test('pull 远端 index：未确认本机墓碑保留，已确认被远端列表取代', () async {
+      final (model, engine, _) = await _setup();
+      // 本机两枚墓碑：一枚已确认（基线 ≥ revision），一枚未确认
+      model.index.tombstones.addAll([
+        Tombstone('01CONF', 'todo', '2026-08-01T00:00:00Z', 2, 'dev-m'),
+        Tombstone('01PEND', 'todo', '2026-08-02T00:00:00Z', 1, 'dev-m'),
+      ]);
+      engine.state.baselines[engine.state.baselineKey('todo', '01CONF')] =
+          ObjectBaseline('todo', '01CONF', 2, null);
+      // 远端规范形态 index：墓碑列表为桌面的 01REMOTE
+      const remoteCanonical =
+          '{"schemaVersion":1,"tombstones":[{"deletedAt":"2026-09-01T08:00:00.123456789Z","deviceId":"desktop-dev","id":"01REMOTE","kind":"todo","projectId":"local","revision":5}]}';
+      final hash = engine.sha256Of(utf8.encode(remoteCanonical));
+      await engine.debugApplyChange(
+          _objectChange(kind: 'index', id: 'index', revision: 5, contentHash: hash),
+          prefetched: {hash: Uint8List.fromList(utf8.encode(remoteCanonical))},
+          notify: false);
+      final ids = model.index.tombstones.map((t) => t.id).toSet();
+      expect(ids, containsAll(['01REMOTE', '01PEND'])); // 远端落地 + 未确认保留
+      expect(ids, isNot(contains('01CONF'))); // 已确认以远端并集为准
+      expect(
+          model.index.tombstones
+              .firstWhere((t) => t.id == '01REMOTE')
+              .deletedAt,
+          '2026-09-01T08:00:00.123456789Z'); // 原文时间戳保留
+      expect(
+          model.index.tombstones
+              .firstWhere((t) => t.id == '01PEND')
+              .deviceId,
+          'dev-m'); // 未确认条目本机优先（同键覆盖远端）
+    });
+
+    test('墓碑变更经通道记入 index 缓存（含 image）；同 revision 不降精度', () async {
+      final (model, engine, _) = await _setup();
+      // 预置同 revision 的原文条目（模拟先经 index 落地的纳秒形态）
+      model.index.tombstones.add(Tombstone(
+          '01NANO', 'todo', '2026-09-01T08:00:00.123456789Z', 3, 'desktop-dev'));
+      await engine.debugApplyChange(
+          _tombstoneChange(kind: 'todo', id: '01NANO', revision: 3),
+          notify: false);
+      expect(
+          model.index.tombstones
+              .firstWhere((t) => t.id == '01NANO')
+              .deletedAt,
+          '2026-09-01T08:00:00.123456789Z'); // 等 revision 保留原文
+
+      await engine.debugApplyChange(
+          _tombstoneChange(kind: 'image', id: '01IMG.png', revision: 2),
+          notify: false);
+      expect(
+          model.index.tombstones
+              .any((t) => t.id == '01IMG.png' && t.kind == 'image'),
+          isTrue);
+    });
+
+    test('复活守卫：本机墓碑不早于远端对象版本时不落地', () async {
+      final (model, engine, _) = await _setup();
+      model.index.tombstones
+          .add(Tombstone('01DEAD', 'todo', '2026-09-01T00:00:00Z', 4, 'dev-m'));
+      await engine.debugApplyChange(
+          _objectChange(kind: 'todo', id: '01DEAD', revision: 3, contentHash: 'h3'),
+          notify: false);
+      expect(model.todos.any((t) => t.id == '01DEAD'), isFalse);
+      expect(
+          engine.state.baselines[engine.state.baselineKey('todo', '01DEAD')]!
+              .revision,
+          3); // 基线已确认但不应用
+    });
+
+    test('push 仅推送 todo 墓碑；image 墓碑只留本机缓存', () async {
+      final (model, engine, stub) = await _setup();
+      // 分类/索引基线对齐避免无关推送噪音（index 无基线会随墓碑一并推送，属预期）
+      engine.state.baselines[engine.state.baselineKey('classification', 'classification')] =
+          ObjectBaseline('classification', 'classification', 1,
+              engine.classificationHash());
+      model.index.tombstones.addAll([
+        Tombstone('01T', 'todo', '2026-09-01T00:00:00.123456Z', 1, 'dev-m'),
+        Tombstone('01I.png', 'image', '2026-09-01T00:00:00.123456Z', 1, 'dev-m'),
+      ]);
+      stub.onPush = () => api.PushResponse((b) => b
+        ..generation = 1
+        ..results = ListBuilder<api.PushItemResult>([
+          for (final r in [
+            _applied('todo', '01T', 1),
+            _applied('index', 'index', 1),
+          ])
+            api.PushItemResult((c) => c.oneOf = OneOfDynamic(
+                typeIndex: 0,
+                types: const [
+                  api.PushAppliedResult,
+                  api.PushConflictResult,
+                  api.PushRejectedResult,
+                ],
+                value: r)),
+        ]));
+      await engine.pushDirty();
+      expect(stub.pushes, 1);
+      final wire = stub.lastPushBody!;
+      final tombstones = (wire['tombstones'] as List).cast<Map<String, Object?>>();
+      expect(tombstones, hasLength(1));
+      expect(tombstones.single['id'], '01T');
+      expect(tombstones.single['deletedAt'], '2026-09-01T00:00:00.123456Z');
+      expect(tombstones.single.containsKey('projectId'), isFalse); // 推送契约无 projectId
     });
   });
 }

@@ -50,6 +50,8 @@ class AppModel extends ChangeNotifier {
   Map<String, int>? _openCountByCategory;
   Map<String, Set<String>>? _subtreeCache;
   Set<String>? _activeCategoryIdsCache;
+  int? _uncategorizedCount;
+  Map<String, int>? _openCountByTag;
 
   @override
   void notifyListeners() {
@@ -58,6 +60,8 @@ class AppModel extends ChangeNotifier {
     _openCountByCategory = null;
     _subtreeCache = null;
     _activeCategoryIdsCache = null;
+    _uncategorizedCount = null;
+    _openCountByTag = null;
     super.notifyListeners();
   }
 
@@ -234,7 +238,7 @@ class AppModel extends ChangeNotifier {
   Future<void> purgeTodo(String id) async {
     final t = byId(id);
     if (t == null) return;
-    final ts = Tombstone(id, 'todo', DateTime.now().toUtc(), t.revision, deviceId);
+    final ts = Tombstone(id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId);
     index.tombstones.add(ts);
     indexVersion++;
     await store.saveIndex(index); // 墓碑先落盘
@@ -287,7 +291,7 @@ class AppModel extends ChangeNotifier {
     // 永不出现文件已删而墓碑丢失（他端重推时无法判定删除）。
     for (final t in expiredTodos) {
       final ts =
-          Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId);
+          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId);
       index.tombstones.add(ts);
       indexVersion++;
     }
@@ -296,6 +300,17 @@ class AppModel extends ChangeNotifier {
     for (final t in expiredTodos) {
       await store.deleteTodoFile(t.id);
       todos.remove(t);
+      changed = true;
+    }
+    // 墓碑保留期与桌面端一致（index.rs TOMBSTONE_RETENTION_DAYS = 90）：
+    // 到期清理使两端墓碑列表收敛，index 对象不再因列表差异互推
+    final tsCutoff = DateTime.now()
+        .subtract(const Duration(days: TodoStore.tombstoneRetentionDays));
+    final tsBefore = index.tombstones.length;
+    index.tombstones.removeWhere((e) => e.deletedAtUtc.isBefore(tsCutoff));
+    if (index.tombstones.length != tsBefore) {
+      await store.saveIndex(index);
+      indexVersion++;
       changed = true;
     }
     final expiredCats = classification.categories
@@ -327,6 +342,22 @@ class AppModel extends ChangeNotifier {
     for (final t in List.of(trashedTags)) {
       await purgeTag(t.id);
     }
+  }
+
+  /// 记录墓碑到本机 index 缓存（对齐桌面 record_local_tombstone）：
+  /// 远端删除经墓碑通道到达时记入，使两端墓碑列表收敛为并集，
+  /// index 对象哈希不再因列表差异互推。同键仅在新 revision 更高时替换
+  /// （等 revision 保留现有条目可保留远端原文时间戳，避免精度截断）。
+  void recordTombstone(Tombstone ts) {
+    final i = index.tombstones
+        .indexWhere((e) => e.kind == ts.kind && e.id == ts.id);
+    if (i >= 0) {
+      if (ts.revision > index.tombstones[i].revision) {
+        index.tombstones[i] = ts;
+      }
+      return;
+    }
+    index.tombstones.add(ts);
   }
 
   // ---------- 查询 ----------
@@ -536,8 +567,8 @@ class AppModel extends ChangeNotifier {
             t.deletedAt == tryParseRfc3339(cohort))
         .toList();
     for (final t in affected) {
-      index.tombstones
-          .add(Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId));
+      index.tombstones.add(
+          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId));
       indexVersion++;
     }
     // 墓碑先落盘再删文件（同 purgeExpiredTrash 语义）
@@ -576,26 +607,25 @@ class AppModel extends ChangeNotifier {
     final err = validateTagName(name, excludeId: id);
     if (err != null) return err;
     final old = t.name;
-    t.name = name.trim();
-    // 同步更新关联 Todo（含回收站内容）：标签名按 Unicode 小写折叠匹配
-    //（桌面 name_key 语义），批量逐条落盘后只触发一次自动同步
+    final newName = name.trim();
+    // staged 副本：先构造待写 Todo，落盘成功后才替换内存（与 writeTodo 同契约），
+    // 标签名按 Unicode 小写折叠匹配（桌面 name_key 语义），含回收站内容
     final oldLower = old.toLowerCase();
-    var touched = false;
+    final staged = <Todo>[];
     for (final todo in todos) {
       var hit = false;
-      for (var i = 0; i < todo.tags.length; i++) {
-        if (todo.tags[i].toLowerCase() == oldLower) {
-          todo.tags[i] = t.name;
+      final tags = List.of(todo.tags);
+      for (var i = 0; i < tags.length; i++) {
+        if (tags[i].toLowerCase() == oldLower) {
+          tags[i] = newName;
           hit = true;
         }
       }
-      if (hit) {
-        await writeTodo(todo, autosync: false);
-        touched = true;
-      }
+      if (hit) staged.add(todo.copyWith(tags: tags));
     }
-    if (touched) scheduleAutoSync();
+    t.name = newName;
     await _saveClassification();
+    await _writeTodosBulk(staged);
     return null;
   }
 
@@ -639,20 +669,18 @@ class AppModel extends ChangeNotifier {
   Future<void> purgeTag(String id) async {
     final t = classification.tagById(id);
     if (t == null) return;
-    final name = t.name;
-    final lower = name.toLowerCase();
-    classification.tags.removeWhere((e) => e.id == id);
-    var touched = false;
+    final lower = t.name.toLowerCase();
+    // staged 副本：先构造待写 Todo，落盘成功后才替换内存（与 writeTodo 同契约）
+    final staged = <Todo>[];
     for (final todo in todos) {
-      final before = todo.tags.length;
-      todo.tags.removeWhere((e) => e.toLowerCase() == lower);
-      if (todo.tags.length != before) {
-        await writeTodo(todo, autosync: false);
-        touched = true;
+      final tags = todo.tags.where((e) => e.toLowerCase() != lower).toList();
+      if (tags.length != todo.tags.length) {
+        staged.add(todo.copyWith(tags: tags));
       }
     }
-    if (touched) scheduleAutoSync();
+    classification.tags.removeWhere((e) => e.id == id);
     await _saveClassification();
+    await _writeTodosBulk(staged);
   }
 
   List<Tag> get visibleTags => classification.tags.where((t) => !t.isDeleted).toList();
@@ -839,6 +867,37 @@ class AppModel extends ChangeNotifier {
       if (t.isDeleted || t.categoryId == null) continue;
       if (openOnly && t.isCompleted) continue;
       counts[t.categoryId!] = (counts[t.categoryId!] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// 未分类（无目录或目录已删/不存在）的未删除 Todo 数（缓存）。
+  /// 分类页“未分类 N 项 Todo”与目录行共用，避免每行全量扫描。
+  int get uncategorizedTodoCount =>
+      _uncategorizedCount ??= _buildUncategorizedCount();
+
+  int _buildUncategorizedCount() {
+    final active = _activeCategoryIds();
+    var n = 0;
+    for (final t in todos) {
+      if (t.isDeleted) continue;
+      final cid = t.categoryId;
+      if (cid == null || cid.isEmpty || !active.contains(cid)) n++;
+    }
+    return n;
+  }
+
+  /// 标签名 → 未完成且未删除的 Todo 数（分类页标签行“N 项未完成”，缓存）。
+  Map<String, int> get openCountByTag =>
+      _openCountByTag ??= _buildOpenCountByTag();
+
+  Map<String, int> _buildOpenCountByTag() {
+    final counts = <String, int>{};
+    for (final t in todos) {
+      if (t.isDeleted || t.isCompleted) continue;
+      for (final name in t.tags) {
+        counts[name] = (counts[name] ?? 0) + 1;
+      }
     }
     return counts;
   }

@@ -94,6 +94,9 @@ class TodoStore {
 
   static const retentionDays = 30;
 
+  /// 墓碑保留期（对齐桌面 index.rs TOMBSTONE_RETENTION_DAYS）。
+  static const tombstoneRetentionDays = 90;
+
   Future<void> init() async {
     for (final d in [contentDir, tipsDir, imagesDir, stateDir, recoveryDir]) {
       await d.create(recursive: true);
@@ -220,7 +223,8 @@ class TodoStore {
 
   String classificationJson(Classification c) => _jsonEncoder.convert(c.toJson());
 
-  String indexJson(IndexData i) => _jsonEncoder.convert(i.toJson());
+  /// index 对象的哈希与推送 payload 唯一形态：与 saveIndex 相同的规范 JSON。
+  String indexJson(IndexData i) => canonicalJson(i.toJson());
 
   // ---------- index（自定义排序 + 墓碑） ----------
 
@@ -236,9 +240,10 @@ class TodoStore {
     }
   }
 
+  /// 始终写规范形态（字典序 + 2 空格缩进，不含 lastScanAt）：
+  /// 与桌面端 normalize_json_payload 输出逐字节一致，是跨端哈希收敛的基础。
   Future<void> saveIndex(IndexData idx) async {
-    await _atomicWriteString(
-        indexFile, const JsonEncoder.withIndent('  ').convert(idx.toJson()));
+    await _atomicWriteString(indexFile, canonicalJson(idx.toJson()));
   }
 
   // ---------- settings（本机状态，不同步） ----------
@@ -282,56 +287,109 @@ class ScanResult {
 
 class Tombstone {
   final String id; // 对象 ID
-  final String kind; // todo / category / tag / image
-  final DateTime deletedAt;
+  final String kind; // 与桌面 ObjectKind 墓碑域一致：todo / image
+  final String deletedAt; // RFC 3339 原文（保持跨端字节一致，纳秒精度不截断）
   final int revision;
   final String deviceId;
-  Tombstone(this.id, this.kind, this.deletedAt, this.revision, this.deviceId);
+  final String projectId; // 桌面端 index 墓碑恒写，本机缺省 "local"
+  final Object? baseRevision; // 桌面端记录的来源基线；本机创建恒 null
+  final Map<String, Object?> extra; // 未知字段原样保留
+
+  Tombstone(this.id, this.kind, this.deletedAt, this.revision, this.deviceId,
+      {this.projectId = 'local', this.baseRevision, Map<String, Object?>? extra})
+      : extra = extra ?? {};
+
+  DateTime get deletedAtUtc => DateTime.parse(deletedAt).toUtc();
 
   Map<String, Object?> toJson() => {
-        'id': id,
+        'projectId': projectId,
         'kind': kind,
-        'deletedAt': deletedAt.toUtc().toIso8601String(),
+        'id': id,
         'revision': revision,
+        if (baseRevision != null) 'baseRevision': baseRevision,
+        'deletedAt': deletedAt,
         'deviceId': deviceId,
+        ...extra,
       };
 
-  static Tombstone fromJson(Map<String, Object?> j) => Tombstone(
-        j['id'] as String,
-        j['kind'] as String,
-        DateTime.parse(j['deletedAt'] as String),
-        (j['revision'] as num).toInt(),
-        j['deviceId'] as String,
-      );
+  static Tombstone fromJson(Map<String, Object?> j) {
+    final deletedAt = j['deletedAt'];
+    if (deletedAt is! String || deletedAt.isEmpty) {
+      // 桌面端 deletedAt 为必填：缺失视为损坏，交由调用方的损坏隔离路径
+      throw FormatException('墓碑缺少 deletedAt: ${j['id']}');
+    }
+    return Tombstone(
+      j['id'] as String,
+      j['kind'] as String,
+      deletedAt,
+      (j['revision'] as num).toInt(),
+      (j['deviceId'] as String?) ?? '',
+      projectId: (j['projectId'] as String?) ?? 'local',
+      baseRevision: j['baseRevision'],
+      extra: _extras(j, const {
+        'projectId', 'kind', 'id', 'revision', 'baseRevision',
+        'deletedAt', 'deviceId',
+      }),
+    );
+  }
+}
+
+Map<String, Object?> _extras(Map<String, Object?> j, Set<String> known) {
+  final out = <String, Object?>{};
+  j.forEach((k, v) {
+    if (!known.contains(k)) out[k] = v;
+  });
+  return out;
 }
 
 class IndexData {
   int schemaVersion;
-  Map<String, List<String>> customOrder; // view -> todo id 列表
+  Map<String, List<String>> customOrder; // view -> todo id 列表（inbox/all）
   List<Tombstone> tombstones;
-  DateTime? lastScanAt;
 
-  IndexData(this.schemaVersion, this.customOrder, this.tombstones, this.lastScanAt);
+  IndexData(this.schemaVersion, this.customOrder, this.tombstones);
 
-  static IndexData empty() => IndexData(1, {}, [], null);
+  static IndexData empty() => IndexData(1, {}, []);
 
   Map<String, Object?> toJson() => {
         'schemaVersion': schemaVersion,
-        'customOrder': customOrder,
+        // 对齐桌面 TipIndex：customOrder 为 None（本端空 map）时整个键省略
+        if (customOrder.isNotEmpty) 'customOrder': customOrder,
         'tombstones': tombstones.map((t) => t.toJson()).toList(),
-        'lastScanAt': lastScanAt?.toUtc().toIso8601String(),
       };
 
   static IndexData fromJson(Map<String, Object?> j) => IndexData(
         (j['schemaVersion'] as num?)?.toInt() ?? 1,
-        ((j['customOrder'] as Map?) ?? {})
-            .map((k, v) => MapEntry(k.toString(), (v as List).map((e) => e.toString()).toList())),
+        (((j['customOrder'] as Map?) ?? {})
+            .map((k, v) =>
+                MapEntry(k.toString(), (v as List).map((e) => e.toString()).toList()))
+          // 桌面端 CustomOrder 为 typed 结构（inbox/all），未知键解析即丢弃；
+          // 本端同样只保留该键域，避免两端对未知键的保留策略不对称
+          ..removeWhere((k, _) => k != 'inbox' && k != 'all')),
         ((j['tombstones'] as List?) ?? [])
-            .map((e) => Tombstone.fromJson((e as Map).cast()))
+            .map((e) => Tombstone.fromJson((e as Map).cast<String, Object?>()))
             .toList(),
-        j['lastScanAt'] == null ? null : DateTime.parse(j['lastScanAt'] as String),
       );
 }
+
+/// 规范 JSON：递归按 key 字典序排列后 2 空格缩进输出。
+/// 与桌面端 serde_json::Value（BTreeMap 字典序）+ to_string_pretty 逐字节一致，
+/// 是 index 对象哈希与推送 payload 的统一形态。
+const _canonicalEncoder = JsonEncoder.withIndent('  ');
+
+Object? _sortKeysDeep(Object? v) {
+  if (v is Map) {
+    final keys = v.keys.map((k) => k.toString()).toList()..sort();
+    return {
+      for (final k in keys) k: _sortKeysDeep(v[k]),
+    };
+  }
+  if (v is List) return v.map(_sortKeysDeep).toList();
+  return v;
+}
+
+String canonicalJson(Object? value) =>
+    _canonicalEncoder.convert(_sortKeysDeep(value));
 
 extension _FileDelete on File {
   Future<void> deleteIfExists() async {

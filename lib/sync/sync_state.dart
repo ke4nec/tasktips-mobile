@@ -143,6 +143,8 @@ class SyncStateData {
   final Map<String, RejectedRecord> rejected = {};
   /// 登录失效/设备撤销/项目维护时暂停自动提交，存错误码；手动同步不受限。
   String? submitPaused;
+  /// 上次完整同步轮完成时间（UI 状态卡“上次同步”）。
+  DateTime? lastSyncAt;
   bool autoSync = false;
   bool bootstrapped = false;
 
@@ -160,6 +162,7 @@ class SyncStateData {
         'logs': logs.map((l) => l.toJson()).toList(),
         'rejected': rejected.map((k, v) => MapEntry(k, v.toJson())),
         'submitPaused': submitPaused,
+        'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
         'autoSync': autoSync,
         'bootstrapped': bootstrapped,
       };
@@ -190,6 +193,9 @@ class SyncStateData {
           RejectedRecord.fromJson((v as Map).cast<String, Object?>());
     });
     s.submitPaused = j['submitPaused'] as String?;
+    s.lastSyncAt = j['lastSyncAt'] == null
+        ? null
+        : DateTime.parse(j['lastSyncAt'] as String);
     return s;
   }
 
@@ -199,19 +205,28 @@ class SyncStateData {
   }
 
   String baselineKey(String kind, String id) => '$kind/$id';
+
+  /// 记录/更新冲突：同一对象的未解决冲突只保留最新一条。
+  /// 多轮 pull 反复收到同一对象的远端更新时不去重会累积出
+  /// 多张重复冲突卡，且逐条解决后才真正清除。
+  void addConflict(ConflictRecord c) {
+    final i = conflicts.indexWhere(
+        (e) => e.kind == c.kind && e.id == c.id && !e.resolved);
+    if (i >= 0) {
+      conflicts[i] = c;
+    } else {
+      conflicts.add(c);
+    }
+  }
 }
 
+/// sync-state.json 的字符串序列化（文件读写由引擎负责）。
 class SyncStateStore {
-  // 简单 JSON 文件持久化；凭据另存安全存储。
-  // ignore: unused_field
-  final String _path;
-  SyncStateStore(this._path);
-
   static const _encoder = JsonEncoder.withIndent('  ');
 
-  SyncStateData load(String raw) =>
+  static SyncStateData load(String raw) =>
       raw.isEmpty ? SyncStateData() : SyncStateData.fromJson(
           (jsonDecode(raw) as Map).cast<String, Object?>());
 
-  String save(SyncStateData d) => _encoder.convert(d.toJson());
+  static String save(SyncStateData d) => _encoder.convert(d.toJson());
 }

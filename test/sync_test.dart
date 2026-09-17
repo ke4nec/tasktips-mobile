@@ -43,8 +43,8 @@ void main() {
       d.addLog(
           SyncLogEntry(DateTime.utc(2026, 9, 16), 'download', 1, 'error', 'HTTP_500'));
 
-      final raw = SyncStateStore('').save(d);
-      final back = SyncStateStore('').load(raw);
+      final raw = SyncStateStore.save(d);
+      final back = SyncStateStore.load(raw);
 
       expect(back.serverUrl, d.serverUrl);
       expect(back.projectId, 'p-1');

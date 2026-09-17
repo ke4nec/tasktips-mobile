@@ -13,9 +13,11 @@ import 'package:one_of/one_of.dart';
 import 'package:tasktips_api/tasktips_api.dart' as api;
 
 import '../app/app_model.dart';
+import '../domain/classification.dart' show rfc3339Utc;
 import '../domain/todo.dart';
 import '../infra/backup.dart';
 import '../infra/markdown_doc.dart';
+import '../infra/store.dart' show IndexData, Tombstone;
 import 'session.dart';
 import 'sync_state.dart';
 
@@ -116,11 +118,17 @@ class SyncEngine extends ChangeNotifier {
 
   File get _stateFile => File('${model.store.stateDir.path}/sync-state.json');
 
+  /// 上次本进程读/写 state 文件的 mtime：前台恢复时据此检测
+  /// WorkManager 后台进程是否重写过状态（避免用陈旧基线重推/误报冲突）。
+  DateTime? _stateMtime;
+
   Future<void> loadState() async {
     if (await _stateFile.exists()) {
       try {
-        state = SyncStateStore('').load(await _stateFile.readAsString());
+        final raw = await _stateFile.readAsString();
+        state = SyncStateStore.load(raw);
         stateLoadFailed = false;
+        _stateMtime = await _stateFile.lastModified();
       } catch (_) {
         // 基线/墓碑状态不明：不静默重置为空继续推，先暂停自动推送
         state = SyncStateData();
@@ -135,11 +143,32 @@ class SyncEngine extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 前台恢复时检查 state 文件是否被其它进程（WorkManager 后台同步）重写；
+  /// 是则重载同步状态与磁盘数据。后台进程推送过本机内容后，前台内存中的
+  /// 基线已过期，继续使用会把已同步对象误记冲突或重推被服务端拒绝。
+  Future<void> reloadStateIfExternallyChanged() async {
+    if (busy) return; // 同步进行中不换状态
+    try {
+      if (!await _stateFile.exists()) return;
+      final mtime = await _stateFile.lastModified();
+      final known = _stateMtime;
+      if (known != null && !mtime.isAfter(known)) return;
+      await loadState();
+      await model.load();
+      notifyListeners();
+    } catch (_) {
+      // 检测失败不阻塞前台恢复，按原状态继续
+    }
+  }
+
   Future<void> _persist() async {
     await _stateFile.parent.create(recursive: true);
     final tmp = File('${_stateFile.path}.tmp');
-    await tmp.writeAsString(SyncStateStore('').save(state), flush: true);
+    await tmp.writeAsString(SyncStateStore.save(state), flush: true);
     await tmp.rename(_stateFile.path);
+    try {
+      _stateMtime = await _stateFile.lastModified();
+    } catch (_) {}
   }
 
   void _log(String direction, int count, String result, [String? code]) {
@@ -517,6 +546,25 @@ class SyncEngine extends ChangeNotifier {
     return _indexHash!;
   }
 
+  /// 图片内容哈希缓存（path → mtime/size/hash）：hasUnsyncedChanges 会在
+  /// UI 通知路径上反复调用，不能每次都同步读盘 + SHA-256 大图。
+  final _imageHashCache = <String, (DateTime, int, String)>{};
+
+  String? _imageHashOf(File f) {
+    try {
+      final st = f.statSync();
+      final cached = _imageHashCache[f.path];
+      if (cached != null && cached.$1 == st.modified && cached.$2 == st.size) {
+        return cached.$3;
+      }
+      final h = sha256Of(f.readAsBytesSync());
+      _imageHashCache[f.path] = (st.modified, st.size, h);
+      return h;
+    } catch (_) {
+      return null;
+    }
+  }
+
   // ---------- 首次连接预览（只读） ----------
 
   Future<SyncPreview> preview() async {
@@ -673,7 +721,7 @@ class SyncEngine extends ChangeNotifier {
         if (localDirty) {
           // 删除 vs 本机未同步编辑：保留本机并记录冲突（远端版本为删除），
           // 不静默丢弃
-          state.conflicts.add(ConflictRecord(
+          state.addConflict(ConflictRecord(
               kind, id, t.revision, revision, null,
               remoteDeleted: true));
         } else {
@@ -688,12 +736,24 @@ class SyncEngine extends ChangeNotifier {
               '${model.store.imagesDir.path}/$id${id.contains('.') ? '' : '.$ext'}');
           if (await f.exists() && state.baselines[key] == null) {
             // 本机未同步的图片：保留并记录冲突（远端版本为删除）
-            state.conflicts.add(ConflictRecord(
+            state.addConflict(ConflictRecord(
                 kind, id, 1, revision, null,
                 remoteDeleted: true));
           } else if (await f.exists()) {
             await f.delete();
           }
+        }
+      }
+      // 记入本机 index 墓碑缓存（todo/image，对齐桌面 record_local_tombstone）：
+      // 两端列表收敛为并集后，index 对象哈希不再因墓碑列表差异互推
+      if (kind == 'todo' || kind == 'image') {
+        final deletedAt = m['deletedAt'];
+        final raw = deletedAt is DateTime ? rfc3339Utc(deletedAt) : null;
+        if (raw != null) {
+          model.recordTombstone(
+              Tombstone(id, kind, raw, revision, m['deviceId'] as String? ?? ''));
+          await model.store.saveIndex(model.index);
+          model.indexVersion++;
         }
       }
       state.baselines[key] = ObjectBaseline(kind, id, revision, null);
@@ -708,8 +768,19 @@ class SyncEngine extends ChangeNotifier {
     }
     // 本机待保存内容与远端更新并存 → 整对象冲突，保留本机并记录
     if (base != null && _localDirty(kind, id, base)) {
-      state.conflicts.add(ConflictRecord(kind, id, base.revision, revision, hash));
+      state.addConflict(ConflictRecord(kind, id, base.revision, revision, hash));
       return;
+    }
+    // 本机墓碑不早于远端版本：该对象已按更新或同版本的删除处理，
+    // 跳过应用避免已删除对象经旧版本复活（对齐桌面 pull 前置墓碑判定）
+    if (kind == 'todo' || kind == 'image') {
+      final localTs = model.index.tombstones
+          .where((e) => e.kind == kind && e.id == id)
+          .firstOrNull;
+      if (localTs != null && localTs.revision >= revision) {
+        state.baselines[key] = ObjectBaseline(kind, id, revision, hash);
+        return;
+      }
     }
     final bytes = prefetched?[hash] ?? await _downloadPayload(hash);
     if (sha256Of(bytes) != hash) {
@@ -786,7 +857,10 @@ class SyncEngine extends ChangeNotifier {
         model.classificationVersion++;
         model.classificationCorrupt = false; // 远端权威副本已修复本地损坏
       case 'index':
-        final idx = model.store.indexFromRawJson(text);
+        // 对齐桌面 local_apply_payload：远端墓碑列表不直接落地，改为
+        // 「远端列表 + 本机未确认墓碑（同键本机优先）」合并写回，
+        // 保证本机删除意图（未推送墓碑）不被远端列表覆盖（设计 §4.2）
+        final idx = _mergeRemoteIndex(text);
         model.index = idx;
         await model.store.saveIndex(idx);
         model.indexVersion++;
@@ -813,6 +887,22 @@ class SyncEngine extends ChangeNotifier {
       }
     } catch (_) {}
     return null;
+  }
+
+  /// 应用远端 index：远端墓碑列表 ∪ 本机未确认墓碑（同键本机优先）。
+  /// 已确认（基线 revision ≥ 墓碑 revision）的本机条目以远端列表为准，
+  /// 使两端列表收敛；未确认条目是本机待推送的删除意图，不得丢弃。
+  IndexData _mergeRemoteIndex(String remoteRaw) {
+    final parsed = model.store.indexFromRawJson(remoteRaw);
+    final merged = [...parsed.tombstones];
+    for (final ts in model.index.tombstones) {
+      final base = state.baselines[state.baselineKey(ts.kind, ts.id)];
+      if (base != null && base.revision >= ts.revision) continue; // 已确认
+      merged.removeWhere((e) => e.kind == ts.kind && e.id == ts.id);
+      merged.add(ts);
+    }
+    parsed.tombstones = merged;
+    return parsed;
   }
 
   // ---------- pull ----------
@@ -969,7 +1059,10 @@ class SyncEngine extends ChangeNotifier {
       }
     }
 
+    // 仅推送 todo 墓碑（对齐桌面 collect_local_tombstones 的 Todo 过滤）；
+    // image 等墓碑只作为本机 index 缓存记录，不经通道重复传播
     for (final ts in model.index.tombstones) {
+      if (ts.kind != 'todo') continue;
       final key = state.baselineKey(ts.kind, ts.id);
       final base = state.baselines[key];
       if (base == null || base.revision < ts.revision) {
@@ -978,8 +1071,8 @@ class SyncEngine extends ChangeNotifier {
           'id': ts.id,
           'revision': ts.revision,
           'baseRevision': base?.revision,
-          'deletedAt': ts.deletedAt.toUtc().toIso8601String(),
-          'deviceId': model.deviceId,
+          'deletedAt': ts.deletedAt,
+          'deviceId': ts.deviceId,
         });
       }
     }
@@ -1081,7 +1174,7 @@ class SyncEngine extends ChangeNotifier {
         } else if (oneOf is api.PushConflictResult) {
           kind = oneOf.kind.name;
           id = oneOf.id;
-          state.conflicts.add(ConflictRecord(
+          state.addConflict(ConflictRecord(
               kind, id, oneOf.expectedRevision ?? 0, oneOf.actualRevision ?? 0, null));
         } else {
           final rej = oneOf as api.PushRejectedResult;
@@ -1157,6 +1250,12 @@ class SyncEngine extends ChangeNotifier {
 
   @visibleForTesting
   String? errorCodeOf(DioException e) => _errorCodeOf(e);
+
+  /// 单条变更应用的测试缝（墓碑合并/复活守卫等回归用）。
+  @visibleForTesting
+  Future<void> debugApplyChange(api.SyncChange change,
+          {Map<String, Uint8List>? prefetched, bool notify = true}) =>
+      _applyChange(change, prefetched: prefetched, notify: notify);
 
   @visibleForTesting
   String dioMessage(DioException e, String fallback) => _dioMessage(e, fallback);
@@ -1297,9 +1396,8 @@ class SyncEngine extends ChangeNotifier {
         if (state.baselines[key] != null) continue;
         final rej = state.rejected[key];
         if (rej != null) {
-          try {
-            if (rej.contentHash == sha256Of(e.readAsBytesSync())) continue;
-          } catch (_) {}
+          final h = _imageHashOf(File(e.path));
+          if (h != null && rej.contentHash == h) continue;
         }
         return true;
       }
@@ -1313,8 +1411,9 @@ class SyncEngine extends ChangeNotifier {
       if (rej != null && rej.contentHash == hash) continue;
       return true;
     }
-    // 未提交的墓碑
+    // 未提交的墓碑（口径与 pushDirty 一致：仅 todo）
     for (final ts in model.index.tombstones) {
+      if (ts.kind != 'todo') continue;
       final key = state.baselineKey(ts.kind, ts.id);
       final base = state.baselines[key];
       if (base == null || base.revision < ts.revision) return true;
@@ -1347,6 +1446,7 @@ class SyncEngine extends ChangeNotifier {
           await pull();
           await pushDirty();
           state.submitPaused = null;
+          state.lastSyncAt = DateTime.now();
           _consecutiveFailures = 0;
           _lastFailureAt = null;
           status = state.pendingPush != null || state.rejected.isNotEmpty
@@ -1417,15 +1517,12 @@ class SyncEngine extends ChangeNotifier {
   }
 
   String _dioMessage(DioException e, String fallback) {
-    // 优先解析服务端 ErrorCode（openapi ErrorResponse.code）
+    // 优先解析服务端 ErrorCode（openapi ErrorResponse.code 枚举域）
     switch (_errorCodeOf(e)) {
       case 'ACCOUNT_DISABLED':
         return '账号已被禁用';
       case 'DEVICE_REVOKED':
         return '设备已被撤销，请重新登录';
-      case 'AUTH_INVALID':
-      case 'SESSION_EXPIRED':
-        return '登录已失效，请重新登录';
       case 'PROJECT_MAINTENANCE':
         return '项目维护中，稍后再试';
       case 'RATE_LIMITED':
@@ -1451,6 +1548,8 @@ class SyncEngine extends ChangeNotifier {
 
 /// 跨进程同步互斥锁：state/sync.lock 记录持有者与时间戳。
 /// 存在新鲜锁（<15 分钟，非本实例）时获取失败；陈旧锁视为崩溃残留可抢占。
+/// dart:io 无 O_EXCL，"检查→写入"存在 TOCTOU 窗口：写入携带唯一 token 并
+/// 回读确认仍是自己的内容，窗口压缩到"写→读"之间且双持有者会互相暴露。
 /// 公开以便回归测试直接覆盖互斥语义。
 class SyncLock {
   final File _file;
@@ -1465,8 +1564,14 @@ class SyncLock {
         final age = DateTime.now().millisecondsSinceEpoch - ts;
         if (age < 15 * 60 * 1000 && age > -60 * 1000) return null; // 他人持有
       }
-      await f.writeAsString(
-          '${DateTime.now().millisecondsSinceEpoch}\n', flush: true);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // 首行仍为时间戳（新鲜度判定），次行为持有者 token（回读确认）
+      final content = '$now\n$now-${identityHashCode(SyncLock)}';
+      await f.writeAsString(content, flush: true);
+      // 回读确认：极小窗口内两进程同时写入时，后写者覆盖前写者，
+      // 前写者读到不属于自己的内容即放弃，至多一个持有者
+      final back = await f.readAsString();
+      if (back != content) return null;
       return SyncLock(f);
     } catch (_) {
       return null; // 锁文件不可写：保守放弃本轮

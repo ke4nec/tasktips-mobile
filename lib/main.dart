@@ -154,10 +154,14 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       _startAutoSyncTimer();
       if (s == null) return;
-      // 恢复前台触发自动同步
-      if (s.state.autoSync) {
-        Future.microtask(() => s.syncNow());
-      }
+      // 后台 WorkManager 进程可能已重写同步状态并推送过本机内容：
+      // 先重载再触发同步，避免前台用陈旧基线重推/误报冲突
+      Future.microtask(() async {
+        await s.reloadStateIfExternallyChanged();
+        if (s.state.autoSync) {
+          await s.syncNow();
+        }
+      });
     } else if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused) {
       _autoSyncTimer?.cancel();
