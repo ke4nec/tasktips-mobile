@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tasktips/app/app_model.dart';
+import 'package:tasktips/domain/classification.dart';
 import 'package:tasktips/domain/query.dart';
 import 'package:tasktips/domain/todo.dart';
 import 'package:tasktips/infra/store.dart';
@@ -151,6 +152,34 @@ void main() {
       expect(await model.createCategory('B2', parentId: b1.id), isNull);
       expect(await model.createCategory('B3', parentId: model.childCategories(b1.id).firstWhere((e) => e.name != 'A3', orElse: () => model.childCategories(b1.id).first).id), isNull);
     });
+
+    test('moveCategory 目标同层重名/父目录校验/文案区分', () async {
+      expect(await model.createCategory('父级A'), isNull);
+      expect(await model.createCategory('父级B'), isNull);
+      final pa = model.rootCategories.firstWhere((e) => e.name == '父级A');
+      final pb = model.rootCategories.firstWhere((e) => e.name == '父级B');
+      expect(await model.createCategory('同名', parentId: pa.id), isNull);
+      expect(await model.createCategory('同名', parentId: pb.id), isNull);
+      final dupA = model.childCategories(pa.id).first;
+      // 移入已存在同名目录的目标层 → 拒绝
+      expect(await model.moveCategory(dupA.id, pb.id), '同级已存在同名目录');
+      // 移入不存在的父目录 → 拒绝（不产生悬空 parentId）
+      expect(await model.moveCategory(dupA.id, '不存在的ID'), '目标目录不存在或已删除');
+      // 自移与移入子孙文案与桌面端区分
+      expect(await model.moveCategory(pa.id, pa.id), '不能把目录移动到自己下面');
+      expect(await model.moveCategory(pa.id, dupA.id), '不能把目录移动到自己的子目录下');
+      // 移入已删除的父目录 → 拒绝
+      await model.trashCategory(pb.id);
+      expect(await model.moveCategory(dupA.id, pb.id), '目标目录不存在或已删除');
+      // 移动回收站中的目录 → 拒绝
+      expect(await model.moveCategory(pb.id, null), '不能移动回收站中的目录');
+      // 合法移动到根：同层无重名 → 通过
+      expect(await model.createCategory('孤儿', parentId: pa.id), isNull);
+      final orphan =
+          model.childCategories(pa.id).firstWhere((e) => e.name == '孤儿');
+      expect(await model.moveCategory(orphan.id, null), isNull);
+      expect(model.classification.byId(orphan.id)!.parentId, isNull);
+    });
   });
 
   group('未分类口径', () {
@@ -187,6 +216,35 @@ void main() {
       final sorted = model.query(TodoQuery(
           view: TodoView.inbox, defaultSort: false, sortKey: SortKey.createdAt));
       expect(sorted.map((t) => t.id), containsAll([a.id, b.id, c.id]));
+    });
+  });
+
+  group('颜色色板校验（对齐桌面 validate_color）', () {
+    test('canonicalizeColor：空/语义键/大小写/非法值', () {
+      expect(canonicalizeColor(null), kDefaultColor);
+      expect(canonicalizeColor(''), kDefaultColor);
+      expect(canonicalizeColor('blue'), '#4a9eff'); // 旧语义键迁移
+      expect(canonicalizeColor('#4A9EFF'), '#4a9eff'); // 大小写归一
+      expect(canonicalizeColor('#123456'), kDefaultColor); // 非色板 → 默认灰
+      expect(canonicalizeColor('red'), '#f97066');
+    });
+
+    test('非法颜色永不写出：fromJson 与 setter 均回退默认灰', () async {
+      final c = Category.fromJson({
+        'id': 'c1',
+        'name': '目录',
+        'color': '#123456',
+        'createdAt': '2026-01-01T00:00:00Z',
+        'updatedAt': '2026-01-01T00:00:00Z',
+      });
+      expect(c.color, kDefaultColor);
+      expect(await model.createCategory('目录一', color: '#123456'), isNull);
+      expect(model.classification.byId(model.rootCategories.first.id)!.color,
+          kDefaultColor);
+      await model.setCategoryColor(
+          model.rootCategories.first.id, 'not-a-color');
+      expect(model.classification.byId(model.rootCategories.first.id)!.color,
+          kDefaultColor);
     });
   });
 

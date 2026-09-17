@@ -33,18 +33,23 @@ class TodoStore {
   /// 魔数白名单（不信任文件名与 MIME）：PNG/JPEG/GIF/WebP/BMP，SVG 拒绝。
   /// 返回扩展名；不识别返回 null。
   static String? sniffImageExtension(Uint8List b) {
-    if (b.length >= 8) {
+    if (b.length >= 4) {
       if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
         return 'png';
       }
-      // RIFF....WEBP
-      if (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
+      // RIFF....WEBP：需满 12 字节才判定（与桌面 image_store.rs 一致）
+      if (b.length >= 12 &&
+          b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
           b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) {
         return 'webp';
       }
     }
     if (b.length >= 6) {
-      if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) {
+      // 仅接受 GIF87a / GIF89a 全 6 字节（桌面 image_store.rs 同）
+      if ((b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38 &&
+              b[4] == 0x37 && b[5] == 0x61) ||
+          (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38 &&
+              b[4] == 0x39 && b[5] == 0x61)) {
         return 'gif';
       }
     }

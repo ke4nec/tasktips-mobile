@@ -36,10 +36,20 @@ ParsedDoc parseTodoDoc(String text) {
   if (!normalized.startsWith('---\n')) {
     throw FrontMatterException('缺少 front matter 起始标记');
   }
-  final end = normalized.indexOf('\n---', 4);
-  if (end < 0) throw FrontMatterException('缺少 front matter 结束标记');
-  final fmText = normalized.substring(4, end);
-  var body = normalized.substring(end + 4).replaceFirst(RegExp('^\n*'), '');
+  // 结束标记按行判定（整行 trim 后为 ---），避免 `---xyz` 等前缀误判
+  // 切错 YAML 切片（与桌面端 markdown.rs 按行判定一致）
+  final lines = normalized.split('\n');
+  var endLine = -1;
+  for (var i = 1; i < lines.length; i++) {
+    if (lines[i].trim() == '---') {
+      endLine = i;
+      break;
+    }
+  }
+  if (endLine < 0) throw FrontMatterException('缺少 front matter 结束标记');
+  final fmText = lines.sublist(1, endLine).join('\n');
+  var body =
+      lines.sublist(endLine + 1).join('\n').replaceFirst(RegExp('^\n*'), '');
   final YamlMap y;
   try {
     y = loadYaml(fmText) as YamlMap;
@@ -78,7 +88,14 @@ Todo todoFromFields(Map<String, Object?> f, String body) {
   if (status != 'open' && status != 'completed') {
     throw FrontMatterException('非法 status: $status');
   }
-  final priority = (f['priority'] as int?) ?? 0;
+  final priorityRaw = f['priority'];
+  // 非 int（如字符串 "2" / 浮点）显式拒绝为 FrontMatterException，
+  // 避免 as 强转抛 TypeError 导致错误分类失真（调用方按损坏隔离）。
+  final priority = switch (priorityRaw) {
+    null => 0,
+    int p => p,
+    _ => throw FrontMatterException('非法 priority: $priorityRaw'),
+  };
   if (priority < 0 || priority > 3) {
     // 与桌面端 TodoTip::validate 一致：优先级只允许 0-3
     throw FrontMatterException('非法 priority: $priority');

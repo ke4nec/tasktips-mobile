@@ -260,8 +260,8 @@ class _FolderPageState extends State<FolderPage> {
     final ok = await confirmDialog(
       context,
       title: '删除目录',
-      message: '将删除“${c.name}”及其 $todoCount 条任务中的 ${subtree.length - 1} 个子目录。'
-          '任务保留并显示为未分类。可在回收站恢复。',
+      message: '将删除“${c.name}”及其 ${subtree.length - 1} 个子目录、'
+          '$todoCount 条任务（任务随同进入回收站）。可在回收站恢复。',
       confirmText: '删除',
       destructive: true,
     );

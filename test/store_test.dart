@@ -131,4 +131,19 @@ void main() {
     expect((await model.createCategory('四级', parentId: c3.id)), isNotNull);
     expect((await model.createCategory('一级')), isNotNull); // 同名
   });
+
+  test('彻底删除目录：同批 Todo 墓碑先落盘再删文件', () async {
+    final model = AppModel(store);
+    await model.load();
+    expect(await model.createCategory('待清除'), isNull);
+    final c = model.rootCategories.first;
+    final t = await model.createTodo(categoryId: c.id);
+    await model.trashCategory(c.id);
+    await model.purgeCategory(c.id);
+    expect(await store.readTodo(t.id), isNull);
+    // 墓碑已持久化：重新加载 index 仍可见
+    final idx = (await store.loadIndex()).$1;
+    expect(idx.tombstones.any((ts) => ts.id == t.id && ts.kind == 'todo'),
+        isTrue);
+  });
 }

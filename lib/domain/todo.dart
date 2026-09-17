@@ -63,21 +63,6 @@ class Todo {
   bool get isUpcoming =>
       !isCompleted && dueDate != null && dueDate!.compareTo(todayLocal()) > 0;
 
-  /// 正文纯文本摘要（供搜索与列表两行摘要）。
-  String get plainBody {
-    final buf = StringBuffer();
-    var inFence = false;
-    for (final line in body.split('\n')) {
-      if (line.trimLeft().startsWith('```')) {
-        inFence = !inFence;
-        buf.writeln(line);
-        continue;
-      }
-      buf.writeln(line);
-    }
-    return buf.toString();
-  }
-
   Todo copyWith({
     DateTime? deletedAt,
     bool clearDeletedAt = false,

@@ -163,6 +163,8 @@ class AppModel extends ChangeNotifier {
   Future<void> writeTodo(Todo updated) async {
     updated.updatedAt = DateTime.now().toUtc();
     updated.revision += 1;
+    // 内存态同样保证 0-3 不变量：非法值钳制，永不落盘脏数据
+    updated.priority = updated.priority.clamp(0, 3);
     updated.title = deriveTitle(updated.body);
     await store.saveTodo(updated);
     final i = todos.indexWhere((t) => t.id == updated.id);
@@ -220,9 +222,7 @@ class AppModel extends ChangeNotifier {
   List<Tag> get trashedTags =>
       classification.tags.where((t) => t.isDeleted).toList();
 
-  static String _normalizeColorValue(String c) =>
-      const {'blue': '#4a9eff', 'green': '#6ccb5f', 'orange': '#fb923c',
-            'purple': '#a78bfa', 'red': '#f97066', 'gray': '#8a8a8a'}[c.toLowerCase()] ?? c;
+  static String _normalizeColorValue(String c) => canonicalizeColor(c);
 
   static bool _isBefore(String? rfc3339, DateTime cutoff) =>
       (tryParseRfc3339(rfc3339) ?? DateTime.now()).isBefore(cutoff);
@@ -246,17 +246,21 @@ class AppModel extends ChangeNotifier {
     final expiredTodos = todos
         .where((t) => t.isDeleted && t.deletedAt!.isBefore(cutoff))
         .toList();
+    // 墓碑先落盘再删文件：崩溃窗口内至多残留文件（下次清理重试），
+    // 永不出现文件已删而墓碑丢失（他端重推时无法判定删除）。
     for (final t in expiredTodos) {
       final ts =
           Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId);
       index.tombstones.add(ts);
       indexVersion++;
+    }
+    // index.json 只在批量墓碑写完后落盘一次，避免逐条全量重写
+    if (expiredTodos.isNotEmpty) await store.saveIndex(index);
+    for (final t in expiredTodos) {
       await store.deleteTodoFile(t.id);
       todos.remove(t);
       changed = true;
     }
-    // index.json 只在批量墓碑写完后落盘一次，避免逐条全量重写
-    if (expiredTodos.isNotEmpty) await store.saveIndex(index);
     final expiredCats = classification.categories
         .where((c) => c.isDeleted && _isBefore(c.deletedAt, cutoff))
         .toList();
@@ -312,11 +316,12 @@ class AppModel extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 批量写入 Todo（目录整树删除/恢复的 cohort 连带）：逐条落盘，
-  /// 全部成功后一次性广播并触发一次自动同步。
-  Future<void> _writeTodosBulk(Iterable<Todo> list) async {
+  /// 批量写入 Todo（目录整树删除/恢复的 cohort 连带）：调用方传入已 staged
+  /// 的副本（copyWith），本方法逐条先落盘后更新内存——与 [writeTodo] 同一契约，
+  /// 失败时内存列表保持原状，不出现内存已脏而磁盘未写的中间态。
+  Future<void> _writeTodosBulk(List<Todo> updated) async {
     final now = DateTime.now().toUtc();
-    for (final t in list) {
+    for (final t in updated) {
       t.updatedAt = now;
       t.revision += 1;
       await store.saveTodo(t);
@@ -373,14 +378,21 @@ class AppModel extends ChangeNotifier {
     return null;
   }
 
+  /// 移动目录（对齐桌面端 move_category 六条校验）：
+  /// 保留 ID 拦截 / 自移 / 移入子孙 / 父层级+子树高度≤3 /
+  /// 目标同层重名 / 仅改 parentId+updatedAt。
   Future<String?> moveCategory(String id, String? newParentId) async {
     final c = classification.byId(id);
     if (c == null) return '目录不存在';
-    if (newParentId != null &&
-        (id == newParentId || classification.subtreeOf(id).contains(newParentId))) {
-      return '不能移动到自身或其子目录';
-    }
+    if (id == 'uncategorized') return '不能移动系统保留目录';
+    if (c.isDeleted) return '不能移动回收站中的目录';
     if (newParentId != null) {
+      if (newParentId == id) return '不能把目录移动到自己下面';
+      if (classification.subtreeOf(id).contains(newParentId)) {
+        return '不能把目录移动到自己的子目录下';
+      }
+      final parent = classification.byId(newParentId);
+      if (parent == null || parent.isDeleted) return '目标目录不存在或已删除';
       // 按被移动子树的最深子孙校验：目标深度 + 子树高度 - 1 ≤ 3
       final targetDepth = classification.depthOf(newParentId) + 1;
       final height = classification.subtreeHeight(id);
@@ -388,6 +400,13 @@ class AppModel extends ChangeNotifier {
         return '目录最多三级';
       }
     }
+    // 移动后同层重名校验（大小写折叠，排除自身；桌面 ensure_sibling_name_unique）
+    final nameTaken = classification.categories.any((o) =>
+        o.id != c.id &&
+        !o.isDeleted &&
+        o.parentId == newParentId &&
+        o.name.toLowerCase() == c.name.toLowerCase());
+    if (nameTaken) return '同级已存在同名目录';
     c.parentId = newParentId;
     c.updatedAt = rfc3339Utc(DateTime.now().toUtc());
     await _saveClassification();
@@ -415,11 +434,14 @@ class AppModel extends ChangeNotifier {
         c.updatedAt = cohort;
       }
     }
-    // 子树内未删除的 Todo 同批移入回收站
-    final affected =
-        todos.where((t) => !t.isDeleted && t.categoryId != null && tree.contains(t.categoryId)).toList();
+    // 子树内未删除的 Todo 同批移入回收站（staged 为副本：落盘成功后才替换内存）
+    final affected = todos
+        .where((t) =>
+            !t.isDeleted && t.categoryId != null && tree.contains(t.categoryId))
+        .map((t) => t.copyWith(deletedAt: cohortDt))
+        .toList();
     await _saveClassification();
-    await _writeTodosBulk(affected.map((t) => t..deletedAt = cohortDt));
+    await _writeTodosBulk(affected);
   }
 
   /// 恢复目录（§5.2.2 按原样恢复）：清除本目录与仍处同批软删除状态的
@@ -454,8 +476,9 @@ class AppModel extends ChangeNotifier {
             t.categoryId != null &&
             subtree.contains(t.categoryId) &&
             t.deletedAt == tryParseRfc3339(cohort))
+        .map((t) => t.copyWith(clearDeletedAt: true))
         .toList();
-    await _writeTodosBulk(affected.map((t) => t..deletedAt = null));
+    await _writeTodosBulk(affected);
     return null;
   }
 
@@ -479,10 +502,13 @@ class AppModel extends ChangeNotifier {
       index.tombstones
           .add(Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId));
       indexVersion++;
+    }
+    // 墓碑先落盘再删文件（同 purgeExpiredTrash 语义）
+    if (affected.isNotEmpty) await store.saveIndex(index);
+    for (final t in affected) {
       await store.deleteTodoFile(t.id);
       todos.removeWhere((e) => e.id == t.id);
     }
-    if (affected.isNotEmpty) await store.saveIndex(index);
     await _saveClassification();
   }
 

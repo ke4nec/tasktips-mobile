@@ -340,11 +340,19 @@ String _parseTs(Object? v) {
   return rfc3339Utc(DateTime.now().toUtc());
 }
 
-String _normalizeColor(String? c) {
+/// 颜色规范化（对齐桌面端 validate_color）：null/空 → 默认灰；
+/// 旧语义键 → hex；色板成员（大小写不敏感）→ 小写标准形；
+/// 非色板值 → 默认灰，永不写出桌面编辑路径拒绝的颜色。
+String canonicalizeColor(String? c) {
   if (c == null || c.isEmpty) return kDefaultColor;
   final lower = c.toLowerCase();
-  return _legacySemanticColors[lower] ?? c;
+  final legacy = _legacySemanticColors[lower];
+  if (legacy != null) return legacy;
+  if (kColorPalette.contains(lower)) return lower;
+  return kDefaultColor;
 }
+
+String _normalizeColor(String? c) => canonicalizeColor(c);
 
 Map<String, Object?> _extras(Map<String, Object?> j, Set<String> known) {
   final out = <String, Object?>{};
