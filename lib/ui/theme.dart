@@ -50,8 +50,13 @@ ThemeData buildTheme(Brightness b) {
     brightness: b,
     primary: a.brand,
     onPrimary: a.onBrand,
-    secondary: a.purple,
+    // secondary/tertiary 家族收拢品牌蓝：设计稿无第二强调色，tonal 按钮、
+    // SegmentedButton/Chip 选中态经 M3 默认走 secondaryContainer（未给出时
+    // 回退 secondary，曾因此漏出 purple 令牌色）；purple 仅作内容色板
+    secondary: a.brand,
     onSecondary: a.onBrand,
+    secondaryContainer: a.brandContainer,
+    onSecondaryContainer: a.brandInk,
     error: a.danger,
     onError: a.onBrand,
     surface: a.panel,
