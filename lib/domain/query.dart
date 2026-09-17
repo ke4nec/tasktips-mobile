@@ -9,10 +9,15 @@ enum SortKey { updatedAt, createdAt, dueDate, priority, title }
 
 enum SortOrder { asc, desc }
 
+/// 标签筛选模式（桌面 domain/query.rs TagFilterMode）：
+/// and=全部命中、or=任一命中、exclude=均不包含；标签为空时恒命中。
+enum TagFilterMode { and, or, exclude }
+
 class TodoQuery {
   TodoView view;
   String? search; // 标题、正文纯文本、标签，大小写不敏感
-  List<String>? tagNames; // 全部匹配（AND）
+  List<String>? tagNames;
+  TagFilterMode tagMode; // 仅内存查询态，不落盘、不进同步对象
   Set<int> priorities; // 多选取并集；空集不限
   List<String>? categoryIds; // 命中任一，含子目录（调用方展开）
   bool uncategorized;
@@ -26,6 +31,7 @@ class TodoQuery {
     this.view = TodoView.inbox,
     this.search,
     this.tagNames,
+    this.tagMode = TagFilterMode.and,
     this.priorities = const {},
     this.categoryIds,
     this.uncategorized = false,
@@ -99,11 +105,18 @@ List<Todo> runQuery(
         t.tags.any((tag) => tag.toLowerCase().contains(search)));
   }
   if (q.tagNames != null && q.tagNames!.isNotEmpty) {
+    // Unicode 小写折叠（与桌面 name_key 语义一致）
     final lower = q.tagNames!.map((e) => e.toLowerCase()).toSet();
-    it = it.where((t) {
+    bool match(Todo t) {
       final own = t.tags.map((e) => e.toLowerCase()).toSet();
-      return lower.every(own.contains);
-    });
+      return switch (q.tagMode) {
+        TagFilterMode.and => lower.every(own.contains),
+        TagFilterMode.or => lower.any(own.contains),
+        TagFilterMode.exclude => !lower.any(own.contains),
+      };
+    }
+
+    it = it.where(match);
   }
   if (q.priorities.isNotEmpty) {
     it = it.where((t) => q.priorities.contains(t.priority));

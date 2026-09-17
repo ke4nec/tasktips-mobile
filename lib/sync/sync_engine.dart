@@ -90,6 +90,9 @@ class SyncEngine extends ChangeNotifier {
             final resp = await dio.fetch(req);
             return h.resolve(resp);
           } catch (_) {
+            // 刷新失败：清空凭据，避免失效 refresh token 留在安全存储、
+            // 重启后被 loadState 重新判为“已连接”的死循环（阶段4 §5.1）
+            await session.clear();
             return h.next(e);
           }
         }
@@ -220,6 +223,16 @@ class SyncEngine extends ChangeNotifier {
         ..email = email;
     }
     state.projectId = projectId;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// 重新选择项目（保留账号连接）：清空项目上下文回到项目选择页；
+  /// 选择不同项目时 selectProject 会隔离同步基线并失效在飞流。
+  Future<void> beginProjectSwitch() async {
+    _epoch++;
+    busy = false;
+    state.projectId = null;
     await _persist();
     notifyListeners();
   }

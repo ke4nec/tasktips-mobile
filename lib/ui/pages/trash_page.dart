@@ -23,26 +23,6 @@ class _TrashPageState extends State<TrashPage> {
     final a = appColors(context, Theme.of(context).brightness);
     return SecondaryScaffold(
       title: '回收站',
-      actions: [
-        IconButton(
-          tooltip: '清空回收站',
-          onPressed: () async {
-            final ok = await confirmDialog(context,
-                title: '清空回收站',
-                message: '将彻底删除回收站中的全部 Todo、目录和标签，不可恢复。',
-                confirmText: '清空',
-                destructive: true);
-            if (ok) {
-              await m.emptyTrash();
-              if (context.mounted) {
-                ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('回收站已清空')));
-              }
-            }
-          },
-          icon: const Icon(Icons.delete_sweep_outlined),
-        ),
-      ],
       body: Column(
         children: [
           Padding(
@@ -63,12 +43,64 @@ class _TrashPageState extends State<TrashPage> {
               ],
             ),
           ),
+          // 设计稿 inline-notice：brand-container 卡片说明保留策略
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text('删除后保留 30 天，到期自动清理。',
-                  style: TextStyle(fontSize: 12, color: a.muted)),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: a.brandContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: a.brandInk),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '删除的 Todo 保留 30 天\n恢复后保留原目录与标签。',
+                      style:
+                          TextStyle(fontSize: 13, height: 1.5, color: a.brandInk),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // 设计稿 section-head：“N 项 Todo” 计数 + 清空按钮
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('${_itemCount(m)} 项 $_segLabel',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: a.muted)),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(foregroundColor: a.danger),
+                  onPressed: _itemCount(m) == 0
+                      ? null
+                      : () async {
+                          final ok = await confirmDialog(context,
+                              title: '清空回收站',
+                              message: '将彻底删除回收站中的全部 Todo、目录和标签，不可恢复。',
+                              confirmText: '清空',
+                              destructive: true);
+                          if (ok) {
+                            await m.emptyTrash();
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('回收站已清空')));
+                            }
+                          }
+                        },
+                  child: const Text('清空'),
+                ),
+              ],
             ),
           ),
           Expanded(
@@ -90,6 +122,14 @@ class _TrashPageState extends State<TrashPage> {
       ),
     );
   }
+
+  String get _segLabel => switch (_seg) { 0 => 'Todo', 1 => '目录', _ => '标签' };
+
+  int _itemCount(AppModel m) => switch (_seg) {
+        0 => m.trashedTodos.length,
+        1 => m.trashedCategories.length,
+        _ => m.trashedTags.length,
+      };
 
   Widget _itemShell(BuildContext context,
       {required Widget leading,
@@ -161,7 +201,13 @@ class _TrashPageState extends State<TrashPage> {
           title: t.title.isEmpty ? '未命名 Todo' : t.title,
           subtitle:
               '删除于 ${_localTs(t.deletedAt!)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · ${m.classification.categoryPath(t.categoryId)}',
-          onRestore: () => m.restoreTodo(t.id),
+          onRestore: () async {
+            await m.restoreTodo(t.id);
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('已恢复到原目录与标签')));
+            }
+          },
           onPurge: () async {
             final ok = await confirmDialog(context,
                 title: '彻底删除',
@@ -191,16 +237,16 @@ class _TrashPageState extends State<TrashPage> {
           subtitle:
               '删除于 ${_localTs(c.deletedAt!)} · 剩余 ${m.remainingDays(c.deletedAt!)} 天',
           onRestore: () async {
-            await m.restoreCategory(c.id);
+            final err = await m.restoreCategory(c.id);
             if (context.mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('目录已恢复')));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                  content: Text(err ?? '目录已恢复（同批子目录与 Todo 一并恢复）')));
             }
           },
           onPurge: () async {
             final ok = await confirmDialog(context,
                 title: '彻底删除',
-                message: '将永久删除目录“${c.name}”，不可恢复。',
+                message: '将永久删除目录“${c.name}”及同批删除的子目录与 Todo，不可恢复。',
                 confirmText: '彻底删除',
                 destructive: true);
             if (ok) await m.purgeCategory(c.id);
@@ -226,10 +272,10 @@ class _TrashPageState extends State<TrashPage> {
           subtitle:
               '删除于 ${_localTs(t.deletedAt!)} · 剩余 ${m.remainingDays(t.deletedAt!)} 天 · 关联 ${m.todos.where((e) => e.tags.contains(t.name)).length} 条',
           onRestore: () async {
-            await m.restoreTag(t.id);
+            final err = await m.restoreTag(t.id);
             if (context.mounted) {
               ScaffoldMessenger.of(context)
-                  .showSnackBar(const SnackBar(content: Text('标签已恢复')));
+                  .showSnackBar(SnackBar(content: Text(err ?? '标签已恢复')));
             }
           },
           onPurge: () async {
@@ -246,7 +292,8 @@ class _TrashPageState extends State<TrashPage> {
     );
   }
 
-  Widget _empty() => const EmptyState(icon: Icons.delete_outline, title: '回收站为空');
+  Widget _empty() => const EmptyState(
+      icon: Icons.delete_outline, title: '回收站是空的', subtitle: '已删除的 Todo 会暂存在这里。');
 
   static String _localTs(Object ts) {
     final d = ts is DateTime ? ts : DateTime.tryParse(ts as String);

@@ -2,9 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../app/app_model.dart';
 import '../../domain/todo.dart';
+import '../../infra/store.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
@@ -30,7 +32,7 @@ class _DetailPageState extends State<DetailPage> {
   bool _preview = false;
   bool _closing = false;
   _SaveState _saveState = _SaveState.saved;
-  final bool _imeComposing = false;
+  bool _imeComposing = false; // 输入法组合期：不落盘、不派生标题
   int _cbCounter = 0;
   // 待保存的最新快照（比已提交保存更新的内容在此排队）
   Todo? _pendingSnapshot;
@@ -64,11 +66,15 @@ class _DetailPageState extends State<DetailPage> {
 
   void _onBodyChanged() {
     if (_closing) return;
+    // 输入法组合期间不重设内容/不触发保存；组合结束会再次回调
+    final range = _bodyCtrl.value.composing;
+    _imeComposing = range.isValid && range != TextRange.empty;
     setState(() {
       _lastInputAt = DateTime.now();
       if (_saveState != _SaveState.failed) _saveState = _SaveState.pending;
     });
     _debounce?.cancel();
+    if (_imeComposing) return;
     _debounce = Timer(const Duration(milliseconds: 400), () => _saveSnapshot());
   }
 
@@ -141,6 +147,11 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<bool> _onWillPop() async {
+    // 系统返回顺序：先收起键盘，再退出编辑页（设计 §2 交互补充）
+    if (_bodyFocus.hasFocus) {
+      _bodyFocus.unfocus();
+      return false;
+    }
     // 保存失败时不能丢弃正文返回
     if (_saveState == _SaveState.failed) {
       final retry = await showDialog<bool>(
@@ -241,29 +252,13 @@ class _DetailPageState extends State<DetailPage> {
         body: Column(
           children: [
             Expanded(
-              child: _preview
-                  ? Markdown(
-                  data: _bodyCtrl.text,
-                  selectable: false,
-                  sizedImageBuilder: (config) => _ImagePlaceholder(
-                      a: a, alt: config.alt ?? config.title ?? '图片'),
-                  checkboxBuilder: (checked) {
-                    final idx = _cbCounter++;
-                    return InkWell(
-                      onTap: () => _toggleTask(idx),
-                      child: Icon(
-                        checked
-                            ? Icons.check_box
-                            : Icons.check_box_outline_blank,
-                        size: 18,
-                        color: checked ? a.brand : a.muted,
-                      ),
-                    );
-                  },
-                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                      .copyWith(p: TextStyle(color: a.text)),
-                )
-                  : TextField(
+              // 编辑器用 Offstage 保活：预览切换不销毁 TextField，
+              // 保留撤销历史、选区与输入法会话（设计 §3）
+              child: Stack(
+                children: [
+                  Offstage(
+                    offstage: _preview,
+                    child: TextField(
                       controller: _bodyCtrl,
                       focusNode: _bodyFocus,
                       maxLines: null,
@@ -280,6 +275,31 @@ class _DetailPageState extends State<DetailPage> {
                         contentPadding: const EdgeInsets.all(16),
                       ),
                     ),
+                  ),
+                  if (_preview)
+                    Markdown(
+                      data: _bodyCtrl.text,
+                      selectable: false,
+                      sizedImageBuilder: (config) => _ImagePlaceholder(
+                          a: a, alt: config.alt ?? config.title ?? '图片'),
+                      checkboxBuilder: (checked) {
+                        final idx = _cbCounter++;
+                        return InkWell(
+                          onTap: () => _toggleTask(idx),
+                          child: Icon(
+                            checked
+                                ? Icons.check_box
+                                : Icons.check_box_outline_blank,
+                            size: 18,
+                            color: checked ? a.brand : a.muted,
+                          ),
+                        );
+                      },
+                      styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                          .copyWith(p: TextStyle(color: a.text)),
+                    ),
+                ],
+              ),
             ),
             _metadataBar(context, a, t),
           ],
@@ -424,6 +444,36 @@ class _DetailPageState extends State<DetailPage> {
 
   Future<void> _pickDueDate() async {
     final t = m.byId(_id)!;
+    // 设计稿日期 sheet：清除 / 完成 两个显式入口（替代“选同日清空”的隐式逻辑）
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.event_outlined),
+              title: Text(t.dueDate == null
+                  ? '选择日期'
+                  : '选择日期（当前：${friendlyDate(m.today, t.dueDate)}）'),
+              onTap: () => Navigator.pop(ctx, 'pick'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.event_busy),
+              title: const Text('清除日期'),
+              enabled: t.dueDate != null,
+              onTap: () => Navigator.pop(ctx, 'clear'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'clear') {
+      await m.writeTodo(t.copyWith(clearDueDate: true));
+      return;
+    }
+    if (action != 'pick') return;
+    if (!mounted) return;
     final initial = t.dueDate == null
         ? null
         : DateTime.tryParse(t.dueDate!);
@@ -438,8 +488,7 @@ class _DetailPageState extends State<DetailPage> {
       final s = '${d.year.toString().padLeft(4, '0')}-'
           '${d.month.toString().padLeft(2, '0')}-'
           '${d.day.toString().padLeft(2, '0')}';
-      await m.writeTodo(
-          s == t.dueDate ? t.copyWith(clearDueDate: true) : t.copyWith(dueDate: s));
+      await m.writeTodo(t.copyWith(dueDate: s));
     }
   }
 
@@ -522,12 +571,25 @@ class _DetailPageState extends State<DetailPage> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('确定'),
-                    ),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: selected.isEmpty
+                            ? null
+                            : () {
+                                selected.clear();
+                                setSheet(() {});
+                              },
+                        child: const Text('清除'),
+                      ),
+                      const Spacer(),
+                      SizedBox(
+                        child: FilledButton(
+                          onPressed: () => Navigator.pop(ctx),
+                          child: const Text('完成'),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -575,7 +637,7 @@ class _DetailPageState extends State<DetailPage> {
               btn(Icons.format_quote, '引用', () => _wrapLine('> ')),
               btn(Icons.code, '行内代码', () => _wrapSel('`', '`')),
               btn(Icons.link, '链接', () => _wrapSel('[', '](https://)')),
-              btn(Icons.image_outlined, '图片占位', () => _insertAtCursor('![图片](images/)')),
+              btn(Icons.image_outlined, '插入本地图片', _importImage),
             ],
           ),
         ),
@@ -620,6 +682,41 @@ class _DetailPageState extends State<DetailPage> {
       selection: TextSelection.collapsed(offset: pos + s.length),
     );
     _bodyFocus.requestFocus();
+  }
+
+  /// 系统图片选择器导入：魔数白名单 + ≤10MiB；落盘 `images/<ULID>.<ext>`
+  /// 后在光标处插入引用。校验失败保留编辑内容并提示原因，禁止截断。
+  Future<void> _importImage() async {
+    final xfile = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      requestFullMetadata: false,
+    );
+    if (xfile == null) return;
+    if (!mounted) return;
+    final rawName = xfile.name;
+    try {
+      final bytes = await xfile.readAsBytes();
+      final rel = await m.store.saveImage(bytes);
+      if (!mounted) return;
+      // alt：原始文件名去扩展名、折叠空白、限 60 字符
+      var alt = rawName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+      alt = alt.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (alt.runes.length > 60) {
+        alt =
+            '${String.fromCharCodes(alt.runes.take(59))}…';
+      }
+      _insertAtCursor('![${alt.isEmpty ? '图片' : alt}]($rel)');
+    } on ImageRejectException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('图片读取失败')));
+      }
+    }
   }
 
   /// 预览勾选：直接修改原文 Markdown 中第 index 个任务复选框。

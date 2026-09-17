@@ -33,7 +33,18 @@ class TodayPage extends StatelessWidget {
         final now = DateTime.now();
         const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
         return Scaffold(
-          appBar: AppBar(title: const Text('今日')),
+          appBar: AppBar(
+            title: const Text('今日'),
+            actions: [
+              // 设计稿 L1785：今日页搜索入口 → 跳列表页并聚焦搜索框
+              IconButton(
+                tooltip: '搜索 Todo',
+                onPressed: () => openInboxSearch?.call(),
+                icon: const Icon(Icons.search),
+              ),
+              const SizedBox(width: 8),
+            ],
+          ),
           body: open.isEmpty
               ? ListView(
                   padding: const EdgeInsets.all(16),
@@ -48,6 +59,23 @@ class TodayPage extends StatelessWidget {
                       title: '可以轻松一下了',
                       subtitle: '去列表看看接下来要做的事。',
                     ),
+                    // 空状态也保留即将到期入口（设计稿 L1697 无条件渲染）
+                    if (upcomingCount > 0)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            minimumSize: const Size(48, 48),
+                            foregroundColor: a.brandInk,
+                          ),
+                          onPressed: () => openSecondaryPage(
+                            context,
+                            _FilteredListView(
+                                model: model, view: TodoView.upcoming),
+                          ),
+                          child: Text('查看即将到期 $upcomingCount'),
+                        ),
+                      ),
                   ],
                 )
               : ListView(

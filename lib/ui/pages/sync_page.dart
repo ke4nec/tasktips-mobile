@@ -6,6 +6,7 @@ import '../../app/app_model.dart';
 import '../../sync/sync_engine.dart';
 import '../app.dart';
 import '../theme.dart';
+import '../widgets.dart' show confirmDialog;
 
 /// 同步页：连接服务端、项目选择、立即同步、自动同步开关、
 /// 状态与错误、冲突处理、多设备信息与本机同步日志。
@@ -31,7 +32,22 @@ class _SyncPageState extends State<SyncPage> {
   SyncEngine? get _sync => widget.model.sync;
 
   @override
+  void initState() {
+    super.initState();
+    // 设计 §4.2：预览后本机或远端又发生修改时重新计算，
+    // 不按过期预览展示——本机数据变化即失效缓存。
+    widget.model.addListener(_onModelChanged);
+  }
+
+  void _onModelChanged() {
+    if (_previewFuture != null && mounted) {
+      setState(() => _previewFuture = null);
+    }
+  }
+
+  @override
   void dispose() {
+    widget.model.removeListener(_onModelChanged);
     _serverCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
@@ -270,6 +286,27 @@ class _SyncPageState extends State<SyncPage> {
       padding: const EdgeInsets.all(16),
       children: [
         _statusCard(context, a, sync),
+        if (sync.state.submitPaused != null) ...[
+          const SizedBox(height: 8),
+          // 登录失效/设备撤销/项目维护：自动提交已暂停，手动同步仍可用
+          Card(
+            color: a.dangerContainer,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(Icons.pause_circle_outline, size: 20, color: a.danger),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                        '自动同步已暂停（${sync.state.submitPaused}）。请重新登录或手动同步恢复。',
+                        style: TextStyle(fontSize: 13, color: a.danger)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
         if (!sync.state.bootstrapped) ...[
           const SizedBox(height: 8),
           _firstConnectCard(context, a, sync),
@@ -302,6 +339,16 @@ class _SyncPageState extends State<SyncPage> {
         _devicesCard(context, a, sync),
         const SizedBox(height: 8),
         _logCard(context, a, sync),
+        const SizedBox(height: 12),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text('离线时继续编辑，连接恢复后再同步。',
+              style: TextStyle(fontSize: 12, color: a.muted)),
+        ),
+        const SizedBox(height: 8),
+        TextButton(
+            onPressed: () => _confirmSwitchProject(context, sync),
+            child: const Text('切换项目（重新预览确认）')),
         const SizedBox(height: 8),
         TextButton(
             onPressed: () => sync.logout(),
@@ -309,6 +356,17 @@ class _SyncPageState extends State<SyncPage> {
         const SizedBox(height: 24),
       ],
     );
+  }
+
+  /// 切换项目：回到项目选择页；选择不同项目时同步基线会被隔离，
+  /// 重新走首连预览确认流程（跨项目数据迁移属待确认事项，不自动执行）。
+  Future<void> _confirmSwitchProject(BuildContext context, SyncEngine sync) async {
+    final ok = await confirmDialog(context,
+        title: '切换项目',
+        message: '将断开当前项目的同步上下文并回到项目选择。本地内容保留；'
+            '选择不同项目后会重新预览确认，不会自动迁移内容。',
+        confirmText: '切换项目');
+    if (ok) await sync.beginProjectSwitch();
   }
 
   /// 首次连接：先读取远端概况，用户确认后才开始写入同步。
@@ -355,9 +413,37 @@ class _SyncPageState extends State<SyncPage> {
                   );
                 }
                 final p = snap.data!;
-                return Text(
-                  '本机待合入 ${p.localOnly} 项 · 远端待接收 ${p.remoteOnly} 项 · 潜在冲突 ${p.conflicts} 项',
-                  style: const TextStyle(fontSize: 14),
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '本机待合入 ${p.localOnly} 项 · 远端待接收 ${p.remoteOnly} 项 · 潜在冲突 ${p.conflicts} 项',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    const SizedBox(height: 12),
+                    // 确认后才开始写入同步（bootstrap）；首连完成会默认开启自动同步
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: sync.busy
+                            ? null
+                            : () async {
+                                await sync.syncNow(manual: true);
+                                if (sync.state.autoSync) {
+                                  await Workmanager().registerPeriodicTask(
+                                    'tasktips-sync',
+                                    'tasktipsPeriodicSync',
+                                    frequency: const Duration(minutes: 15),
+                                    existingWorkPolicy:
+                                        ExistingPeriodicWorkPolicy.keep,
+                                  );
+                                }
+                              },
+                        icon: const Icon(Icons.sync),
+                        label: const Text('确认并开始同步'),
+                      ),
+                    ),
+                  ],
                 );
               },
             ),
@@ -368,18 +454,22 @@ class _SyncPageState extends State<SyncPage> {
   }
 
   Widget _statusCard(BuildContext context, AppColors a, SyncEngine sync) {
+    // "待同步"：已连接/已同步但存在未上传的本机变更（§4.3 六态）
+    final unsynced = !sync.busy && sync.hasUnsyncedChanges;
     final (label, color) = switch (sync.status) {
       SyncStatus.syncing => ('同步中…', a.brandInk),
       SyncStatus.connected => (
           sync.state.conflicts.any((c) => !c.resolved)
               ? '有冲突待处理'
-              : '已连接',
+              : unsynced
+                  ? '待同步'
+                  : '已连接',
           a.brandInk),
-      SyncStatus.synced => ('已同步', a.brandInk),
+      SyncStatus.synced => (unsynced ? '待同步' : '已同步', a.brandInk),
       SyncStatus.conflict => ('有冲突待处理', a.danger),
       SyncStatus.partialFailed => ('部分失败', a.warn),
       SyncStatus.error => ('上次同步失败', a.danger),
-      SyncStatus.disconnected => ('未连接', a.muted),
+      SyncStatus.disconnected => ('仅本机（未连接同步）', a.muted),
     };
     // 设计稿 .sync-card：brand-container 圆角 24 + 32dp 图标 + 副行说明
     return Container(

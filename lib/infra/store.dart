@@ -5,12 +5,22 @@ library;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 
+import '../core/ulid.dart';
 import '../domain/classification.dart';
 import '../domain/todo.dart';
 import 'markdown_doc.dart';
+
+/// 图片导入被拒（格式不支持/超限）：保留编辑内容并提示原因。
+class ImageRejectException implements Exception {
+  final String message;
+  const ImageRejectException(this.message);
+  @override
+  String toString() => message;
+}
 
 class TodoStore {
   final Directory root; // <data>/TaskTips 等价的应用专属目录
@@ -19,6 +29,54 @@ class TodoStore {
   Directory get contentDir => Directory(p.join(root.path, 'content'));
   Directory get tipsDir => Directory(p.join(contentDir.path, 'tips'));
   Directory get imagesDir => Directory(p.join(tipsDir.path, 'images'));
+
+  /// 魔数白名单（不信任文件名与 MIME）：PNG/JPEG/GIF/WebP/BMP，SVG 拒绝。
+  /// 返回扩展名；不识别返回 null。
+  static String? sniffImageExtension(Uint8List b) {
+    if (b.length >= 8) {
+      if (b[0] == 0x89 && b[1] == 0x50 && b[2] == 0x4E && b[3] == 0x47) {
+        return 'png';
+      }
+      // RIFF....WEBP
+      if (b[0] == 0x52 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x46 &&
+          b[8] == 0x57 && b[9] == 0x45 && b[10] == 0x42 && b[11] == 0x50) {
+        return 'webp';
+      }
+    }
+    if (b.length >= 6) {
+      if (b[0] == 0x47 && b[1] == 0x49 && b[2] == 0x46 && b[3] == 0x38) {
+        return 'gif';
+      }
+    }
+    if (b.length >= 3 && b[0] == 0xFF && b[1] == 0xD8 && b[2] == 0xFF) {
+      return 'jpg';
+    }
+    if (b.length >= 2 && b[0] == 0x42 && b[1] == 0x4D) return 'bmp';
+    return null;
+  }
+
+  static const maxImageBytes = 10 * 1024 * 1024;
+
+  /// 保存图片：魔数校验 + ≤10MiB，生成 `images/<ULID>.<ext>`（绝不使用用户
+  /// 原始文件名），临时文件 + rename 原子写。返回正文引用相对路径。
+  /// 校验失败抛参数错误（调用方保留编辑内容并提示原因，禁止截断）。
+  Future<String> saveImage(Uint8List bytes) async {
+    if (bytes.isEmpty) throw const ImageRejectException('图片内容为空');
+    if (bytes.length > maxImageBytes) {
+      throw ImageRejectException(
+          '图片超过 10MiB 上限（当前 ${(bytes.length / 1024 / 1024).toStringAsFixed(1)}MiB）');
+    }
+    final ext = sniffImageExtension(bytes);
+    if (ext == null) {
+      throw const ImageRejectException('不支持的图片格式（支持 PNG/JPEG/GIF/WebP/BMP，不支持 SVG）');
+    }
+    final name = '${newUlid()}.$ext';
+    final f = File(p.join(imagesDir.path, name));
+    final tmp = File('${f.path}.tmp');
+    await tmp.writeAsBytes(bytes, flush: true);
+    await tmp.rename(f.path);
+    return 'images/$name';
+  }
   Directory get stateDir => Directory(p.join(root.path, 'state'));
   Directory get recoveryDir => Directory(p.join(root.path, 'recovery'));
 

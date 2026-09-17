@@ -113,7 +113,8 @@ void main() {
     final iv = model.indexVersion;
     await model.purgeExpiredTrash();
     expect(model.classificationVersion, greaterThan(cv));
-    expect(model.indexVersion, greaterThan(iv));
+    // 分类/标签删除经 classification 整对象传播，不写墓碑、不触碰 index
+    expect(model.indexVersion, iv);
     expect(model.classification.byId(c.id), isNull);
   });
 

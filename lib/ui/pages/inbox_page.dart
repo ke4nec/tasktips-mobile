@@ -22,6 +22,7 @@ class _InboxPageState extends State<InboxPage>
     with AutomaticKeepAliveClientMixin {
   final _searchCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _searchFocus = FocusNode();
   final TodoQuery _q = TodoQuery();
   Timer? _searchDebounce;
 
@@ -29,8 +30,21 @@ class _InboxPageState extends State<InboxPage>
   bool get wantKeepAlive => true;
 
   @override
+  void initState() {
+    super.initState();
+    // 今日页搜索入口联动：切到本页时聚焦搜索框
+    inboxSearchFocusTick.addListener(_onSearchRequested);
+  }
+
+  void _onSearchRequested() {
+    _searchFocus.requestFocus();
+  }
+
+  @override
   void dispose() {
+    inboxSearchFocusTick.removeListener(_onSearchRequested);
     _searchDebounce?.cancel();
+    _searchFocus.dispose();
     _searchCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
@@ -61,6 +75,7 @@ class _InboxPageState extends State<InboxPage>
                     hintText: '搜索标题、正文或标签',
                     leading: const Icon(Icons.search),
                     controller: _searchCtrl,
+                    focusNode: _searchFocus,
                     elevation: const WidgetStatePropertyAll(0),
                     onChanged: (v) {
                       // 防抖：避免每个字符触发一次全量过滤+排序
@@ -110,15 +125,43 @@ class _InboxPageState extends State<InboxPage>
                 ? const EmptyState(icon: Icons.search_off, title: '没有匹配的结果', subtitle: '调整搜索或清除筛选')
                 : const EmptyState(icon: Icons.checklist, title: '暂无任务', subtitle: '点右下角 + 新建一条');
           }
-          return ListView.builder(
-            controller: _scrollCtrl,
-            itemCount: list.length,
-            itemBuilder: (context, i) => TodoTile(
-              model: widget.model,
-              todo: list[i],
-              showCategory: true,
-              onOpen: () => openDetailPage(context, widget.model, list[i].id),
-            ),
+          // 设计稿 result-summary：结果计数 + 生中的筛选/排序说明
+          final sortLabel = _q.defaultSort
+              ? ''
+              : ' · 按${switch (_q.sortKey) {
+                  SortKey.updatedAt => '更新时间',
+                  SortKey.createdAt => '创建时间',
+                  SortKey.dueDate => '截止日期',
+                  SortKey.priority => '优先级',
+                  SortKey.title => '标题',
+                }}';
+          final highPriority =
+              list.any((t) => t.priority == 3) ? ' · 高优先级' : '';
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('${list.length} 项$highPriority$sortLabel',
+                      style: TextStyle(
+                          fontSize: 12, color: appColors(context, Theme.of(context).brightness).muted)),
+                ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  controller: _scrollCtrl,
+                  padding: const EdgeInsets.only(top: 4),
+                  itemCount: list.length,
+                  itemBuilder: (context, i) => TodoTile(
+                    model: widget.model,
+                    todo: list[i],
+                    showCategory: true,
+                    onOpen: () => openDetailPage(context, widget.model, list[i].id),
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
@@ -200,6 +243,7 @@ class _FilterSheetState extends State<_FilterSheet> {
               TextButton(
                 onPressed: () {
                   q.tagNames = null;
+                  q.tagMode = TagFilterMode.and;
                   q.priorities = {};
                   q.categoryIds = null;
                   q.uncategorized = false;
@@ -259,7 +303,13 @@ class _FilterSheetState extends State<_FilterSheet> {
           ),
           if (tags.isNotEmpty) ...[
             const SizedBox(height: 12),
-            Text('标签（全部匹配）', style: _labelStyle(a)),
+            Text(
+                switch (q.tagMode) {
+                  TagFilterMode.and => '标签（全部包含）',
+                  TagFilterMode.or => '标签（任一包含）',
+                  TagFilterMode.exclude => '标签（均不包含）',
+                },
+                style: _labelStyle(a)),
             Wrap(
               spacing: 8,
               children: [
@@ -274,6 +324,24 @@ class _FilterSheetState extends State<_FilterSheet> {
                           ? q.tagNames!.add(t.name)
                           : q.tagNames!.remove(t.name);
                     }),
+                  ),
+              ],
+            ),
+            // 标签筛选模式（桌面 TagFilterMode）：未选标签时禁用
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final mode in TagFilterMode.values)
+                  ChoiceChip(
+                    label: Text(switch (mode) {
+                      TagFilterMode.and => '全部包含',
+                      TagFilterMode.or => '任一包含',
+                      TagFilterMode.exclude => '均不包含',
+                    }),
+                    selected: q.tagMode == mode,
+                    onSelected: (q.tagNames?.isEmpty ?? true)
+                        ? null
+                        : (sel) => setState(() => q.tagMode = mode),
                   ),
               ],
             ),

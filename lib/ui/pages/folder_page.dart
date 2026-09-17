@@ -76,6 +76,13 @@ class _FolderPageState extends State<FolderPage> {
       children: [
         _categoryRow(context, null),
         for (final c in roots) ..._categorySubtree(context, c, 0),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text('点按进入分类列表，在右上角管理名称。',
+              style: TextStyle(
+                  fontSize: 12,
+                  color: appColors(context, Theme.of(context).brightness).muted)),
+        ),
       ],
     );
   }
@@ -92,9 +99,16 @@ class _FolderPageState extends State<FolderPage> {
   Widget _categoryRow(BuildContext context, Category? c, {int depth = 0}) {
     final m = widget.model;
     final a = appColors(context, Theme.of(context).brightness);
-    final count = c == null
-        ? m.todos.where((t) => !t.isDeleted && (t.categoryId == null || t.categoryId!.isEmpty)).length
-        : m.todoCountInCategory(c.id);
+    // 未分类行（含指向已删目录的 Todo）显示总数；目录行按设计稿显示“N 项未完成”
+    final uncategorized = m.todos
+        .where((t) =>
+            !t.isDeleted &&
+            (t.categoryId == null ||
+                t.categoryId!.isEmpty ||
+                m.classification.isUncategorized(t.categoryId)))
+        .length;
+    final openCount = c == null ? null : m.openTodoCountInCategory(c.id);
+    final count = c == null ? uncategorized : openCount;
     return InkWell(
       onTap: () => openSecondaryPage(
         context,
@@ -107,10 +121,20 @@ class _FolderPageState extends State<FolderPage> {
             border: Border(bottom: BorderSide(color: a.line))),
         child: Row(
           children: [
-            Icon(c == null
-                ? Icons.inbox_outlined
-                : Icons.folder_outlined,
-                size: 22, color: a.muted),
+            // 目录行带色板彩色圆角块（设计稿 .folder-leading）
+            if (c != null)
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: _parseColor(c.color).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.folder_outlined,
+                    size: 20, color: _parseColor(c.color)),
+              )
+            else
+              Icon(Icons.inbox_outlined, size: 22, color: a.muted),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -118,7 +142,10 @@ class _FolderPageState extends State<FolderPage> {
                 style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
             ),
-            Text('$count', style: TextStyle(color: a.muted, fontSize: 13)),
+            Text(
+              c == null ? '$count 项 Todo' : '$count 项未完成',
+              style: TextStyle(color: a.muted, fontSize: 13),
+            ),
             if (c != null)
               PopupMenuButton<String>(
                 onSelected: (v) async {
@@ -283,7 +310,8 @@ class _FolderPageState extends State<FolderPage> {
                           style: const TextStyle(
                               fontSize: 16, fontWeight: FontWeight.w500)),
                     ),
-                    Text('${m.todos.where((t) => !t.isDeleted && t.tags.contains(tag.name)).length}',
+                    Text(
+                        '${m.todos.where((t) => !t.isDeleted && !t.isCompleted && t.tags.contains(tag.name)).length} 项未完成',
                         style: TextStyle(color: a.muted, fontSize: 13)),
                     PopupMenuButton<String>(
                       onSelected: (v) async {
@@ -498,4 +526,14 @@ class TagTodoList extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 色板 hex（#rrggbb）→ Color；非法值回退默认灰。
+Color _parseColor(String hex) {
+  final h = hex.replaceFirst('#', '');
+  if (h.length == 6) {
+    final v = int.tryParse(h, radix: 16);
+    if (v != null) return Color(0xFF000000 | v);
+  }
+  return const Color(0xFF8A8A8A);
 }

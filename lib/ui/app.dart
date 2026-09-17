@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app/app_model.dart';
@@ -13,6 +15,10 @@ import 'theme.dart';
 
 /// 全局导航键：分享入口等服务级跳转使用。
 final navigatorKey = GlobalKey<NavigatorState>();
+
+/// 今日页搜索入口 → 跳转列表页并聚焦搜索框（由 HomeShell 注入实现）。
+final ValueNotifier<int> inboxSearchFocusTick = ValueNotifier<int>(0);
+void Function()? openInboxSearch;
 
 class TaskTipsApp extends StatefulWidget {
   final AppModel model;
@@ -84,15 +90,27 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   int _tab = 0;
+  Timer? _dayTick;
+  String _knownToday = '';
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _knownToday = widget.model.today;
+    // 前台跨午夜/时区变化时主动重算今日分组（设计 §3：恢复前台重算）
+    _dayTick = Timer.periodic(const Duration(seconds: 30), (_) {
+      final t = widget.model.today;
+      if (t != _knownToday) {
+        _knownToday = t;
+        widget.model.refreshToday();
+      }
+    });
   }
 
   @override
   void dispose() {
+    _dayTick?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -101,14 +119,27 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // 恢复前台时重新计算今日分组并检查回收站到期
     if (state == AppLifecycleState.resumed) {
+      _knownToday = widget.model.today;
       widget.model.refreshToday();
       widget.model.purgeExpiredTrash();
     }
   }
 
   @override
+  void didChangeLocales(List<Locale>? locales) {
+    // 时区通常随区域设置变化：重算今日，不改写用户截止日期
+    widget.model.refreshToday();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final model = widget.model;
+    // 今日页搜索入口的跨 Tab 联动：切到列表页并聚焦搜索框
+    openInboxSearch = () {
+      if (!mounted) return;
+      setState(() => _tab = 1);
+      inboxSearchFocusTick.value++;
+    };
     final pages = [
       TodayPage(model: model),
       InboxPage(model: model),

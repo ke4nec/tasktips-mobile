@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:workmanager/workmanager.dart';
@@ -46,11 +47,26 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
   final _share = ShareService();
   SyncEngine? _sync;
   Timer? _autoSyncTimer;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  bool _wasOffline = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 网络恢复触发自动同步（设计 §4.4）：仅 none→在线 的边沿触发
+    _connectivitySub = Connectivity()
+        .onConnectivityChanged
+        .listen((results) {
+      final offline = results.contains(ConnectivityResult.none);
+      if (_wasOffline && !offline) {
+        final s = _sync;
+        if (s != null && s.state.autoSync) {
+          Future.microtask(() => s.syncNow());
+        }
+      }
+      _wasOffline = offline;
+    });
     _model = () async {
       final dir = await getApplicationSupportDirectory();
       final model = AppModel(TodoStore(dir));
@@ -126,6 +142,7 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _connectivitySub?.cancel();
     _autoSyncTimer?.cancel();
     _share.stop();
     super.dispose();

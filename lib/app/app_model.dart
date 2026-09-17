@@ -45,6 +45,7 @@ class AppModel extends ChangeNotifier {
   // 派生数据缓存：notifyListeners 时统一失效
   Map<String, Todo>? _byIdCache;
   Map<String, int>? _countByCategory;
+  Map<String, int>? _openCountByCategory;
   Map<String, Set<String>>? _subtreeCache;
   Set<String>? _activeCategoryIdsCache;
 
@@ -52,6 +53,7 @@ class AppModel extends ChangeNotifier {
   void notifyListeners() {
     _byIdCache = null;
     _countByCategory = null;
+    _openCountByCategory = null;
     _subtreeCache = null;
     _activeCategoryIdsCache = null;
     super.notifyListeners();
@@ -404,8 +406,9 @@ class AppModel extends ChangeNotifier {
   /// cohort 时间戳一并软删除；父子引用原样保留（恢复时按原样回归）。
   Future<void> trashCategory(String id) async {
     final tree = classification.subtreeOf(id);
-    final now = DateTime.now().toUtc();
-    final cohort = rfc3339Utc(now);
+    final cohort = rfc3339Utc(DateTime.now().toUtc());
+    // Todo 与目录使用同一解析值，保证恢复/清理时 cohort 精确匹配
+    final cohortDt = DateTime.parse(cohort);
     for (final c in classification.categories) {
       if (tree.contains(c.id) && !c.isDeleted) {
         c.deletedAt = cohort;
@@ -416,7 +419,7 @@ class AppModel extends ChangeNotifier {
     final affected =
         todos.where((t) => !t.isDeleted && t.categoryId != null && tree.contains(t.categoryId)).toList();
     await _saveClassification();
-    await _writeTodosBulk(affected.map((t) => t..deletedAt = now));
+    await _writeTodosBulk(affected.map((t) => t..deletedAt = cohortDt));
   }
 
   /// 恢复目录（§5.2.2 按原样恢复）：清除本目录与仍处同批软删除状态的
@@ -444,22 +447,16 @@ class AppModel extends ChangeNotifier {
       }
     }
     await _saveClassification();
-    // 同批移入回收站的 Todo 一并恢复（此前单独删除的不动）
+    // 同批移入回收站的 Todo 一并恢复（此前单独删除的不动；精确匹配 cohort）
     final affected = todos
         .where((t) =>
             t.isDeleted &&
             t.categoryId != null &&
             subtree.contains(t.categoryId) &&
-            _sameCohort(t.deletedAt!, cohort))
+            t.deletedAt == tryParseRfc3339(cohort))
         .toList();
     await _writeTodosBulk(affected.map((t) => t..deletedAt = null));
     return null;
-  }
-
-  /// cohort 时间戳（秒/毫秒精度差）视为同批。
-  static bool _sameCohort(DateTime a, String cohort) {
-    final c = tryParseRfc3339(cohort);
-    return c != null && a.difference(c.toUtc()).abs() <= const Duration(seconds: 1);
   }
 
   /// 彻底删除目录（§5.2.3）：移除本目录与同批仍在回收站的子目录实体，
@@ -476,7 +473,7 @@ class AppModel extends ChangeNotifier {
             t.isDeleted &&
             t.categoryId != null &&
             subtree.contains(t.categoryId) &&
-            _sameCohort(t.deletedAt!, cohort))
+            t.deletedAt == tryParseRfc3339(cohort))
         .toList();
     for (final t in affected) {
       index.tombstones
@@ -617,10 +614,25 @@ class AppModel extends ChangeNotifier {
     return n;
   }
 
-  Map<String, int> _buildCounts() {
+  /// 目录子树的未完成 Todo 数（设计稿分类行“N 项未完成”口径）。
+  int openTodoCountInCategory(String categoryId) {
+    _openCountByCategory ??= _buildCounts(openOnly: true);
+    final subtree = _subtreeCache ??= {};
+    final ids =
+        subtree.putIfAbsent(categoryId, () => expandCategoryIds(categoryId));
+    final counts = _openCountByCategory!;
+    var n = 0;
+    for (final id in ids) {
+      n += counts[id] ?? 0;
+    }
+    return n;
+  }
+
+  Map<String, int> _buildCounts({bool openOnly = false}) {
     final counts = <String, int>{};
     for (final t in todos) {
       if (t.isDeleted || t.categoryId == null) continue;
+      if (openOnly && t.isCompleted) continue;
       counts[t.categoryId!] = (counts[t.categoryId!] ?? 0) + 1;
     }
     return counts;
