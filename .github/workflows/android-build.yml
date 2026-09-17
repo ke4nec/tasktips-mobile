@@ -14,6 +14,10 @@ concurrency:
 env:
   FLUTTER_VERSION: '3.47.4'
 
+# 仓库默认 GITHUB_TOKEN 只读；各作业按需提升（release 写 contents，清理制品写 actions）
+permissions:
+  contents: read
+
 jobs:
   check:
     name: 分析与测试
@@ -62,6 +66,8 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write  # gh release create/upload
     steps:
       - uses: actions/checkout@v4
 
@@ -160,6 +166,8 @@ jobs:
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: write  # 删除本仓库的构建制品
     steps:
       - name: 删除本次运行的构建制品并清空过期制品
         env:
@@ -169,16 +177,36 @@ jobs:
         run: |
           set -euo pipefail
           echo "删除本次运行的全部 artifacts…"
-          gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
-            --jq '.artifacts[].id' | \
-          while read -r id; do
-            [ -n "$id" ] && gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "已删除 artifact $id"
-          done
+          ids=$(gh api --paginate "repos/$REPO/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[].id') || { echo "::error::无法列出本运行的 artifacts"; exit 1; }
+          failed=0
+          if [ -n "$ids" ]; then
+            while read -r id; do
+              [ -n "$id" ] || continue
+              if gh api -X DELETE "repos/$REPO/actions/artifacts/$id"; then
+                echo "已删除 artifact $id"
+              else
+                echo "::warning::artifact $id 删除失败" >&2
+                failed=$((failed + 1))
+              fi
+            done <<< "$ids"
+          fi
+          if [ "$failed" -gt 0 ]; then
+            echo "::error::本运行有 $failed 个 artifact 删除失败（检查 actions: write 权限）"
+            exit 1
+          fi
+
           echo "删除已过期的 artifacts（其余仓库历史残留）…"
-          now=$(date +%s)
-          gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.expired == true) | .id' | \
-          while read -r id; do
-            [ -n "$id" ] && gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && echo "已删除过期 artifact $id"
-          done || true
+          expired=$(gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+            --jq '.artifacts[] | select(.expired == true) | .id') || true
+          if [ -n "$expired" ]; then
+            while read -r id; do
+              [ -n "$id" ] || continue
+              if gh api -X DELETE "repos/$REPO/actions/artifacts/$id"; then
+                echo "已删除过期 artifact $id"
+              else
+                echo "::warning::过期 artifact $id 删除失败，忽略" >&2
+              fi
+            done <<< "$expired"
+          fi
           echo "清理完成"

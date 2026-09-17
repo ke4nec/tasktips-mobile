@@ -45,7 +45,7 @@
 ## CI
 - 本地模拟：`act push -j check`（nektos/act + catthehacker/ubuntu:act-latest 镜像）已验证通过；build 作业含 Android SDK 缺失时自助安装步骤，但本机透明代理环境下 Java sdkmanager 拉取清单会失败（curl 正常），完整 build 需在 GitHub runner 或直连网络验证。
 
-- `.github/workflows/android-build.yml`：PR/push 跑 `flutter analyze` + `flutter test`；push 构建仅 arm64-v8a release APK；`v*` 标签发布到 GitHub Release（APK 当前为 debug 签名，正式签名策略属待确认事项）。pub/Gradle 缓存按锁文件键恢复；artifacts 保留 1 天且 cleanup 作业在发布后立即删除。
+- `.github/workflows/android-build.yml`：PR/push 跑 `flutter analyze` + `flutter test`；push 构建仅 arm64-v8a release APK；`v*` 标签发布到 GitHub Release（APK 当前为 debug 签名，正式签名策略属待确认事项）。pub/Gradle 缓存按锁文件键恢复；artifacts 保留 1 天且 cleanup 作业在发布后立即删除。工作流显式声明最小 `permissions`（顶层 contents:read、build 作业 contents:write 供 gh release、cleanup 作业 actions:write 供删制品）——仓库默认 GITHUB_TOKEN 只读，缺声明时删制品/发 Release 会 403（2026-09-17 修复，脚本同时改为逐条删除+汇总报错，不再单条失败即静默中断）。
 
 ## Workflow
 - Commit format: `<type>(<scope>): <中文描述>` — type is `feat|fix|docs|refactor|test|build|chore`, scope in parens names the area, description in Chinese, no trailing period. Example: `feat(sync): 添加后台同步任务`.
