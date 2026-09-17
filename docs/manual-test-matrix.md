@@ -98,6 +98,8 @@ adb logcat | grep BENCH
 
 ## §5 发布前确认
 
+- [ ] 备份导出/恢复真机：SAF 存 zip→用文件管理器确认可打开；恢复覆盖后现状快照在 recovery/ 可查；恢复后手动同步一次无异常
+- [ ] 切换二选一真机：并入（预览显示本地待合入并合并）；放弃（快照+清空+重拉，原内容仅快照留存）
 - [ ] `android/keystore.properties` 为正式签名（`keytool -list` 指纹与发版记录一致；debug 回退仅内部包）
 - [ ] 设置页版本 == pubspec versionName；versionCode 递增
 - [ ] 备份排除验证：登录→`adb shell bmgr backupnow dev.tasktips.tasktips`→卸载重装→**必须重新登录**（refresh token 未恢复）且旧设备 ID 不复用
