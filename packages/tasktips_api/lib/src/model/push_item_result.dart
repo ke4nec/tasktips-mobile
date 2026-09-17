@@ -1,7 +1,7 @@
 //
-// AUTO-GENERATED FILE, DO NOT MODIFY!
+// AUTO-GENERATED FILE, DO NOT MODIFY!（本文件含手工补丁，见下方 MANUAL PATCH 标记；
+// 重新 codegen 后必须重新应用并跑 test/sync_engine_test.dart 的线格式回归用例）
 //
-
 // ignore_for_file: unused_element
 import 'package:tasktips_api/src/model/error_code.dart';
 import 'package:tasktips_api/src/model/push_applied_result.dart';
@@ -123,6 +123,9 @@ class _$PushItemResultSerializer implements PrimitiveSerializer<PushItemResult> 
     Object oneOfResult;
     Type oneOfType;
     switch (discValue) {
+      // MANUAL PATCH（codegen 缺陷）：同 sync_change.dart，契约线值为
+      // const: applied/conflict/rejected，生成代码误用类型名。两种都接受。
+      case r'applied':
       case r'PushAppliedResult':
         oneOfResult = serializers.deserialize(
           oneOfDataSrc,
@@ -130,6 +133,7 @@ class _$PushItemResultSerializer implements PrimitiveSerializer<PushItemResult> 
         ) as PushAppliedResult;
         oneOfType = PushAppliedResult;
         break;
+      case r'conflict':
       case r'PushConflictResult':
         oneOfResult = serializers.deserialize(
           oneOfDataSrc,
@@ -137,6 +141,7 @@ class _$PushItemResultSerializer implements PrimitiveSerializer<PushItemResult> 
         ) as PushConflictResult;
         oneOfType = PushConflictResult;
         break;
+      case r'rejected':
       case r'PushRejectedResult':
         oneOfResult = serializers.deserialize(
           oneOfDataSrc,

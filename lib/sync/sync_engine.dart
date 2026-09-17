@@ -57,11 +57,13 @@ class SyncEngine extends ChangeNotifier {
   /// sync-state.json 解析失败：墓碑/基线状态不明，自动推送暂停。
   bool stateLoadFailed = false;
 
-  SyncEngine(this.model, this.session) {
-    dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 15),
-      receiveTimeout: const Duration(seconds: 60),
-    ));
+  SyncEngine(this.model, this.session, {Dio? httpClient}) {
+    // httpClient 注入接缝：单测传入带 stub 拦截器的 Dio，不再发起真实网络
+    dio = httpClient ??
+        Dio(BaseOptions(
+          connectTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 60),
+        ));
     dio.interceptors.add(InterceptorsWrapper(
       onRequest: (o, h) {
         if (session.accessToken != null) {
@@ -172,6 +174,7 @@ class SyncEngine extends ChangeNotifier {
       await refreshDevices();
       await _persist();
       status = SyncStatus.connected;
+      state.submitPaused = null; // 重连成功清除旧的暂停标记
       _log('login', 1, 'ok');
       notifyListeners();
       return null;
@@ -187,7 +190,7 @@ class SyncEngine extends ChangeNotifier {
       b.deviceId = model.deviceId;
       b.displayName = 'Android ${model.deviceId.substring(0, 8)}';
       b.platform = 'android';
-      b.appVersion = '0.1.0';
+      b.appVersion = '1.0.0';
     }));
   }
 
@@ -690,15 +693,16 @@ class SyncEngine extends ChangeNotifier {
         final name = e.uri.pathSegments.last;
         if (e is! File || _imageExtFor(name) == null) continue;
         final key = state.baselineKey('image', name);
-        if (state.baselines[key] != null || state.rejected.containsKey(key)) {
-          continue;
-        }
+        if (state.baselines[key] != null) continue;
         final bytes = await e.readAsBytes();
+        final hash = sha256Of(bytes);
+        // 被拒图片：内容变化后才重试，同内容不再上传
+        final rej = state.rejected[key];
+        if (rej != null && rej.contentHash == hash) continue;
         if (bytes.length > _payloadLimits['image']!) {
-          _recordRejected(key, 'PAYLOAD_TOO_LARGE', 1, sha256Of(bytes));
+          _recordRejected(key, 'PAYLOAD_TOO_LARGE', 1, hash);
           continue;
         }
-        final hash = sha256Of(bytes);
         await _ensurePayloadUploaded(hash, bytes);
         objects.add({
           'kind': 'image',
@@ -860,13 +864,15 @@ class SyncEngine extends ChangeNotifier {
         } else {
           final rej = oneOf as api.PushRejectedResult;
           final key = state.baselineKey(rej.kind.name, rej.id);
-          final revision = pending.objects
+          final pendingObj = pending.objects
               .where((o) => o['id'] == rej.id && o['kind'] == rej.kind.name)
-              .map((o) => (o['revision'] as num).toInt())
               .firstOrNull;
-          // 记录被拒对象：本地未变化前不再重试（校验失败停止重试该对象）
-          state.rejected[key] =
-              RejectedRecord(rej.code.name, revision ?? -1, null);
+          final revision = pendingObj == null
+              ? -1
+              : (pendingObj['revision'] as num).toInt();
+          // 记录被拒对象（含当时哈希）：本地未变化前不再重试
+          state.rejected[key] = RejectedRecord(
+              rej.code.name, revision, pendingObj?['contentHash'] as String?);
           _log('upload', 1, 'rejected', rej.code.name);
         }
       }
@@ -899,6 +905,47 @@ class SyncEngine extends ChangeNotifier {
       _log('upload', 0, 'error', 'HTTP_${code ?? 'network'}');
       rethrow;
     }
+  }
+
+  /// 认证终局失效判定（阶段4 §5.1）：设备被撤销 / 账号被禁用 /
+  /// 凭据无效（刷新已失败或无 refresh token 时的 401）。
+  /// 命中后必须走 [handleTerminalAuthFailure] 清凭据转 disconnected，
+  /// 不得让失效凭据留存导致“已连接但一直失败”循环。
+  bool isTerminalAuthFailure(DioException e) {
+    switch (errorCodeOf(e)) {
+      case 'DEVICE_REVOKED':
+      case 'ACCOUNT_DISABLED':
+      case 'AUTHENTICATION_REQUIRED':
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// 终局失效处理：暂停自动提交 + 清空凭据 + 转 disconnected + 持久化，
+  /// 用户重新登录后恢复。幂等，可重复调用。
+  Future<void> handleTerminalAuthFailure(DioException e) async {
+    state.submitPaused = errorCodeOf(e) ?? 'HTTP_${e.response?.statusCode ?? 'network'}';
+    await session.clear();
+    status = SyncStatus.disconnected;
+    lastError = _dioMessage(e, '登录已失效，请重新登录');
+    await _persist();
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  String? errorCodeOf(DioException e) => _errorCodeOf(e);
+
+  @visibleForTesting
+  String dioMessage(DioException e, String fallback) => _dioMessage(e, fallback);
+
+  @visibleForTesting
+  bool get debugBackoffActive => _backoffActive;
+
+  @visibleForTesting
+  void debugSetBackoff({required int failures, DateTime? at}) {
+    _consecutiveFailures = failures;
+    _lastFailureAt = at;
   }
 
   /// 从错误响应体解析服务端 ErrorCode（openapi ErrorResponse.code）。
@@ -1004,6 +1051,8 @@ class SyncEngine extends ChangeNotifier {
   // ---------- 顶层同步 ----------
 
   /// 本地是否有未同步变更（供 UI 显示"待同步"）。
+  /// 口径与 pushDirty 一致：todo / 图片 / 分类 / 索引 / 墓碑任一有未提交
+  /// 且未被拒同内容（rejected 同版本/同哈希不再提示），即视为待同步。
   bool get hasUnsyncedChanges {
     if (state.pendingPush != null) return true;
     for (final t in model.todos) {
@@ -1016,6 +1065,38 @@ class SyncEngine extends ChangeNotifier {
         }
       }
     }
+    // 本地图片：未建基线、且未被拒同内容
+    try {
+      for (final e in model.store.imagesDir.listSync()) {
+        if (e is! File) continue;
+        final name = e.uri.pathSegments.last;
+        if (_imageExtFor(name) == null) continue;
+        final key = state.baselineKey('image', name);
+        if (state.baselines[key] != null) continue;
+        final rej = state.rejected[key];
+        if (rej != null) {
+          try {
+            if (rej.contentHash == sha256Of(e.readAsBytesSync())) continue;
+          } catch (_) {}
+        }
+        return true;
+      }
+    } catch (_) {}
+    // 分类/索引：哈希与基线不一致、且未被拒同内容
+    for (final kind in ['classification', 'index']) {
+      final key = state.baselineKey(kind, kind);
+      final hash = kind == 'classification' ? classificationHash() : indexHash();
+      if (state.baselines[key]?.contentHash == hash) continue;
+      final rej = state.rejected[key];
+      if (rej != null && rej.contentHash == hash) continue;
+      return true;
+    }
+    // 未提交的墓碑
+    for (final ts in model.index.tombstones) {
+      final key = state.baselineKey(ts.kind, ts.id);
+      final base = state.baselines[key];
+      if (base == null || base.revision < ts.revision) return true;
+    }
     return false;
   }
 
@@ -1027,7 +1108,7 @@ class SyncEngine extends ChangeNotifier {
       if (_backoffActive) return; // 失败退避中
     }
     // 跨进程互斥：前台与 WorkManager 后台同轮只允许一个写入者
-    final lock = await _SyncLock.acquire(model.store.stateDir.path);
+    final lock = await SyncLock.acquire(model.store.stateDir.path);
     if (lock == null) return;
     busy = true;
     final ep = _epoch;
@@ -1071,9 +1152,14 @@ class SyncEngine extends ChangeNotifier {
       }
     } on DioException catch (e) {
       if (_epoch == ep) {
-        status = SyncStatus.error;
-        lastError = _dioMessage(e, '同步失败');
-        _noteFailure(e);
+        if (isTerminalAuthFailure(e)) {
+          // 设备撤销/账号禁用/凭据无效：清凭据转 disconnected，不再以 error 态重试
+          await handleTerminalAuthFailure(e);
+        } else {
+          status = SyncStatus.error;
+          lastError = _dioMessage(e, '同步失败');
+          _noteFailure(e);
+        }
       }
     } catch (e) {
       if (_epoch == ep) {
@@ -1143,11 +1229,12 @@ class SyncEngine extends ChangeNotifier {
 
 /// 跨进程同步互斥锁：state/sync.lock 记录持有者与时间戳。
 /// 存在新鲜锁（<15 分钟，非本实例）时获取失败；陈旧锁视为崩溃残留可抢占。
-class _SyncLock {
+/// 公开以便回归测试直接覆盖互斥语义。
+class SyncLock {
   final File _file;
-  _SyncLock(this._file);
+  SyncLock(this._file);
 
-  static Future<_SyncLock?> acquire(String stateDir) async {
+  static Future<SyncLock?> acquire(String stateDir) async {
     final f = File('$stateDir/sync.lock');
     try {
       if (await f.exists()) {
@@ -1158,7 +1245,7 @@ class _SyncLock {
       }
       await f.writeAsString(
           '${DateTime.now().millisecondsSinceEpoch}\n', flush: true);
-      return _SyncLock(f);
+      return SyncLock(f);
     } catch (_) {
       return null; // 锁文件不可写：保守放弃本轮
     }

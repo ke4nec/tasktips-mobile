@@ -1,7 +1,7 @@
 //
-// AUTO-GENERATED FILE, DO NOT MODIFY!
+// AUTO-GENERATED FILE, DO NOT MODIFY!（本文件含手工补丁，见下方 MANUAL PATCH 标记；
+// 重新 codegen 后必须重新应用并跑 test/sync_engine_test.dart 的线格式回归用例）
 //
-
 // ignore_for_file: unused_element
 import 'package:tasktips_api/src/model/object_kind.dart';
 import 'package:tasktips_api/src/model/sync_tombstone_change.dart';
@@ -113,6 +113,10 @@ class _$SyncChangeSerializer implements PrimitiveSerializer<SyncChange> {
     Object oneOfResult;
     Type oneOfType;
     switch (discValue) {
+      // MANUAL PATCH（codegen 缺陷）：openapi-generator 按类型名生成辨别器，
+      // 但契约实际线值为 const: object/tombstone（openapi.yaml SyncChange）。
+      // 两种都接受；codegen 的类型名分支保留作兼容。
+      case r'object':
       case r'SyncObjectChange':
         oneOfResult = serializers.deserialize(
           oneOfDataSrc,
@@ -120,6 +124,7 @@ class _$SyncChangeSerializer implements PrimitiveSerializer<SyncChange> {
         ) as SyncObjectChange;
         oneOfType = SyncObjectChange;
         break;
+      case r'tombstone':
       case r'SyncTombstoneChange':
         oneOfResult = serializers.deserialize(
           oneOfDataSrc,
