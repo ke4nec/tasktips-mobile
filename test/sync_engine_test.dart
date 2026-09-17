@@ -577,6 +577,29 @@ void main() {
     });
   });
 
+  group('切换项目：放弃本地采用远端', () {
+    test('快照本机→清空→隔离同步上下文但保留连接', () async {
+      final (model, engine, _) = await _setup();
+      await model.createCategory('工作');
+      await model.createTodo();
+      engine.state.autoSync = true;
+      final (stash, err) = await engine.resetLocalAdoptRemote();
+      expect(err, isNull);
+      expect(stash, isNotNull);
+      expect(Directory(stash!).existsSync(), isTrue); // 快照可反悔
+      expect(model.todos, isEmpty);
+      expect(model.classification.categories, isEmpty);
+      expect(model.index.customOrder, isEmpty);
+      expect(engine.state.serverUrl, 'https://sync.test'); // 连接保留
+      expect(engine.state.accountId, isNull);
+      expect(engine.state.projectId, isNull); // 回到项目选择
+      expect(engine.state.baselines, isEmpty);
+      expect(engine.state.bootstrapped, isFalse);
+      expect(engine.state.autoSync, isTrue);
+      expect(engine.status, SyncStatus.connected);
+    });
+  });
+
   group('批次E/F 校验逻辑（免网络）', () {
     test('renameDevice 名称长度校验', () async {
       final (_, engine, _) = await _setup();

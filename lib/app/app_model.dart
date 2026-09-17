@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart' hide Category;
 
@@ -17,7 +18,8 @@ enum ThemeModeSetting { system, light, dark }
 
 class AppModel extends ChangeNotifier {
   final TodoStore store;
-  late final String deviceId;
+  // 非 final：备份恢复后 load() 重读（设备身份来自 state/，恢复不触碰）。
+  late String deviceId;
 
   /// 同步引擎；由 main 在 load() 后接入。
   SyncEngine? sync;
@@ -101,6 +103,10 @@ class AppModel extends ChangeNotifier {
     onboardingDone = s['onboardingDone'] == true;
     _today = todayLocal();
     await purgeExpiredTrash();
+    // 同步哈希缓存按版本失效：重载（备份恢复等）后内容可能已变，
+    // 递增版本号迫使引擎重算，避免沿用旧哈希漏推
+    classificationVersion++;
+    indexVersion++;
     notifyListeners();
   }
 
@@ -196,6 +202,32 @@ class AppModel extends ChangeNotifier {
     final t = byId(id);
     if (t == null) return;
     await writeTodo(t.copyWith(clearDeletedAt: true));
+  }
+
+  /// 物理删除：先写墓碑，墓碑持久化成功后才移除文件。
+  /// 清空本机内容（切换项目“放弃本地采用远端”用）：todos/分类/索引置空落盘，
+  /// 删除全部 Todo 文件与图片。调用方须先快照 content/ 到 recovery（可反悔）。
+  Future<void> resetToEmpty() async {
+    todos = [];
+    corrupt = [];
+    classification = Classification([], []);
+    classification.dirty = true;
+    index = IndexData.empty();
+    classificationCorrupt = false;
+    indexCorrupt = false;
+    await store.saveClassification(classification);
+    await store.saveIndex(index);
+    await for (final e in store.tipsDir.list()) {
+      if (e is File) await e.delete();
+    }
+    if (await store.imagesDir.exists()) {
+      await for (final e in store.imagesDir.list()) {
+        if (e is File) await e.delete();
+      }
+    }
+    classificationVersion++;
+    indexVersion++;
+    notifyListeners();
   }
 
   /// 物理删除：先写墓碑，墓碑持久化成功后才移除文件。

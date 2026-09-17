@@ -14,6 +14,7 @@ import 'package:tasktips_api/tasktips_api.dart' as api;
 
 import '../app/app_model.dart';
 import '../domain/todo.dart';
+import '../infra/backup.dart';
 import '../infra/markdown_doc.dart';
 import 'session.dart';
 import 'sync_state.dart';
@@ -430,6 +431,35 @@ class SyncEngine extends ChangeNotifier {
     state.projectId = null;
     await _persist();
     notifyListeners();
+  }
+
+  /// 放弃本地采用远端（切换项目二选一之二）：快照本机 content/ 到 recovery
+  /// 后清空，以新设备姿态回到项目选择页重拉。连接（账号/地址/自动开关）保留，
+  /// 项目上下文（基线/cursor/冲突/未完成请求/被拒记录）隔离清空。
+  /// 返回（快照目录，错误文案）：成功时错误为 null，失败时不改动同步状态。
+  Future<(String?, String?)> resetLocalAdoptRemote() async {
+    late final Directory stash;
+    try {
+      stash = await stashContentDir(model.store, 'switch-backup');
+      await model.resetToEmpty();
+    } catch (e) {
+      return (null, '重置失败：$e');
+    }
+    _epoch++;
+    busy = false;
+    final server = state.serverUrl;
+    final account = state.accountId;
+    final email = state.email;
+    final auto = state.autoSync;
+    state = SyncStateData()
+      ..serverUrl = server
+      ..accountId = account
+      ..email = email
+      ..autoSync = auto;
+    await _persist();
+    status = SyncStatus.connected;
+    notifyListeners();
+    return (stash.path, null);
   }
 
   Future<void> logout() async {

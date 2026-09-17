@@ -1,8 +1,11 @@
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_model.dart';
+import '../../infra/backup.dart';
 import '../app.dart';
 import '../theme.dart';
+import '../widgets.dart' show confirmDialog;
 
 /// 设置页（设计稿 settingsPage）：外观 / 数据 / 关于 三组 setting-row，
 /// 行内 trailing 显示当前值，主题用底部面板三选。
@@ -160,6 +163,30 @@ class SettingsPage extends StatelessWidget {
                   style: TextStyle(fontSize: 12, color: a.muted)),
               Text('当前 ${model.todos.length} 条 Todo',
                   style: TextStyle(fontSize: 12, color: a.muted)),
+              const SizedBox(height: 8),
+              Text('备份仅含 Todo 内容、目录、标签与图片，不含设备身份与同步凭据；'
+                  '恢复后按本机改动参与下次同步。',
+                  style: TextStyle(fontSize: 12, color: a.muted)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _exportBackup(context),
+                      icon: const Icon(Icons.upload_outlined, size: 18),
+                      label: const Text('导出备份'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _importBackup(context),
+                      icon: const Icon(Icons.download_outlined, size: 18),
+                      label: const Text('恢复备份'),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
@@ -175,7 +202,72 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
+  /// 导出备份：经系统文件选择器保存 zip（SAF，无需存储权限）。
+  Future<void> _exportBackup(BuildContext context) async {
+    final now = DateTime.now();
+    final name = 'tasktips-backup-${now.year.toString().padLeft(4, '0')}'
+        '${now.month.toString().padLeft(2, '0')}'
+        '${now.day.toString().padLeft(2, '0')}-'
+        '${now.hour.toString().padLeft(2, '0')}'
+        '${now.minute.toString().padLeft(2, '0')}.zip';
+    final path = await FilePicker.saveFile(
+      dialogTitle: '导出备份',
+      fileName: name,
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+    );
+    if (path == null) return; // 用户取消
+    try {
+      await exportBackup(model.store, path, appVersion: appVersion);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('导出失败：$e')));
+      }
+      return;
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('备份已导出')));
+    }
+  }
+
+  /// 恢复备份：覆盖本机全部内容（先快照现状，失败回滚），完成后重载并提示
+  /// 将作为本机改动参与下次同步。
+  Future<void> _importBackup(BuildContext context) async {
+    final picked = await FilePicker.pickFiles(
+      dialogTitle: '选择备份文件',
+      type: FileType.custom,
+      allowedExtensions: ['zip'],
+    );
+    final path = picked?.files.single.path;
+    if (path == null) return; // 用户取消
+    if (!context.mounted) return;
+    final ok = await confirmDialog(context,
+        title: '恢复备份',
+        message: '将用备份覆盖本机全部 Todo、目录与标签（现状先快照到 recovery/）。'
+            '恢复后按本机改动参与下次同步。',
+        confirmText: '恢复',
+        destructive: true);
+    if (!ok) return;
+    try {
+      await importBackup(model.store, path);
+      await model.load();
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('恢复失败：$e')));
+      }
+      return;
+    }
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('已恢复备份，将作为本机改动参与下次同步')));
+    }
+  }
+
   Future<void> _showAbout(BuildContext context) async {
+
     final a = appColors(context, Theme.of(context).brightness);
     await showModalBottomSheet<void>(
       context: context,

@@ -52,6 +52,8 @@ dependencies:
   image_picker: ^1.2.3
   # 快照恢复请求（RestoreRequest oneOf）构造
   one_of: ^1.5.0
+  file_picker: ^11.0.3
+  archive: ^4.3.0
 
 
 dev_dependencies:

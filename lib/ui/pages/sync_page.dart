@@ -369,7 +369,7 @@ class _SyncPageState extends State<SyncPage> {
         const SizedBox(height: 8),
         TextButton(
             onPressed: () => _confirmSwitchProject(context, sync),
-            child: const Text('切换项目（重新预览确认）')),
+            child: const Text('切换项目（并入或重置二选一）')),
         const SizedBox(height: 8),
         TextButton(
             onPressed: () => sync.logout(),
@@ -379,15 +379,50 @@ class _SyncPageState extends State<SyncPage> {
     );
   }
 
-  /// 切换项目：回到项目选择页；选择不同项目时同步基线会被隔离，
-  /// 重新走首连预览确认流程（跨项目数据迁移属待确认事项，不自动执行）。
-  Future<void> _confirmSwitchProject(BuildContext context, SyncEngine sync) async {
+  /// 切换项目二选一（首版 §6 已确认）：并入目标项目，或放弃本地采用远端。
+  /// 两者不再共用含糊的“切换”按钮。
+  Future<void> _confirmSwitchProject(
+      BuildContext context, SyncEngine sync) async {
+    final unsynced =
+        widget.model.todos.where((t) => !t.isDeleted).length;
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text('并入目标项目'),
+              subtitle: Text(
+                  '保留本地内容（$unsynced 条 Todo），选择项目后预览确认再合并。'),
+              onTap: () => Navigator.pop(ctx, 'merge'),
+            ),
+            ListTile(
+              title: const Text('放弃本地，采用远端'),
+              subtitle: const Text('先快照本机到 recovery/，清空后重拉，可反悔。'),
+              onTap: () => Navigator.pop(ctx, 'reset'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !context.mounted) return;
+    if (choice == 'merge') {
+      await sync.beginProjectSwitch();
+      return;
+    }
     final ok = await confirmDialog(context,
-        title: '切换项目',
-        message: '将断开当前项目的同步上下文并回到项目选择。本地内容保留；'
-            '选择不同项目后会重新预览确认，不会自动迁移内容。',
-        confirmText: '切换项目');
-    if (ok) await sync.beginProjectSwitch();
+        title: '放弃本地内容',
+        message: '将快照本机内容到 recovery/switch-backup-* 后清空，'
+            '以新设备姿态重新拉取。快照保留，可手动找回。',
+        confirmText: '放弃并重拉',
+        destructive: true);
+    if (!ok || !context.mounted) return;
+    final (stash, err) = await sync.resetLocalAdoptRemote();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(err ??
+            '已快照到 $stash，请选择项目重新同步')));
   }
 
   /// 首次连接：先读取远端概况，用户确认后才开始写入同步。
