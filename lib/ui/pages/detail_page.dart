@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path/path.dart' as p;
 
 import '../../app/app_model.dart';
 import '../../domain/todo.dart';
@@ -286,8 +288,12 @@ class _DetailPageState extends State<DetailPage> {
                     Markdown(
                       data: _bodyCtrl.text,
                       selectable: false,
-                      sizedImageBuilder: (config) => _ImagePlaceholder(
-                          a: a, alt: config.alt ?? config.title ?? '图片'),
+                      // 本地图片真实渲染，网络图仍占位（设计：不自动加载网络图片）
+                      sizedImageBuilder: (config) => _PreviewImage(
+                          model: m,
+                          uri: config.uri,
+                          alt: config.alt ?? config.title ?? '图片',
+                          a: a),
                       checkboxBuilder: (checked) {
                         final idx = _cbCounter++;
                         return InkWell(
@@ -748,8 +754,59 @@ class _DetailPageState extends State<DetailPage> {
   }
 }
 
-class _ImagePlaceholder extends StatelessWidget {
+/// 预览本地图片：仅渲染 images/ 下的本机文件；网络图、非法引用与缺失文件
+/// 沿用占位（设计：预览不自动加载网络图片）。
+/// 路径规范化后必须仍在 imagesDir 内，防 `../` 穿越到应用目录外。
+class _PreviewImage extends StatelessWidget {
+  final AppModel model;
+  final Uri uri;
+  final String alt;
   final AppColors a;
+  const _PreviewImage(
+      {required this.model,
+      required this.uri,
+      required this.alt,
+      required this.a});
+
+  File? _resolve() {
+    try {
+      if (uri.hasScheme) return null; // http/https/data 等一律不加载
+      var path = Uri.decodeComponent(uri.path);
+      if (path.startsWith('/')) path = path.substring(1);
+      if (!path.startsWith('images/')) return null;
+      final base = p.normalize(model.store.imagesDir.path);
+      final abs =
+          p.normalize(p.join(model.store.tipsDir.path, path));
+      if (abs != base && !abs.startsWith('$base${p.separator}')) {
+        return null;
+      }
+      final f = File(abs);
+      return f.existsSync() ? f : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final f = _resolve();
+    if (f == null) return _ImagePlaceholder(a: a, alt: alt);
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.file(
+          f,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) =>
+              _ImagePlaceholder(a: a, alt: alt),
+        ),
+      ),
+    );
+  }
+}
+
+class _ImagePlaceholder extends StatelessWidget {  final AppColors a;
   final String alt;
   const _ImagePlaceholder({required this.a, required this.alt});
 

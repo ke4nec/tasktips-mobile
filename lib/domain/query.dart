@@ -193,6 +193,8 @@ List<Todo> runQuery(
           d = a.priority - b.priority;
         case SortKey.title:
           d = a.title.toLowerCase().compareTo(b.title.toLowerCase());
+          // 等标题时按 id 稳定决胜（与桌面 sort_by_key 语义一致），不受升降序影响
+          if (d == 0) return a.id.compareTo(b.id);
       }
       return d * mul;
     });

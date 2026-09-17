@@ -101,6 +101,41 @@ void main() {
     expect(model.byId(t.id)!.tags, ['Work']);
   });
 
+  test('标签重命名/彻底删除按大小写折叠匹配', () async {
+    final model = AppModel(store);
+    await model.load();
+    expect(await model.createTag('Work'), isNull);
+    final tagId = model.visibleTags.first.id;
+    // 大小写变体同样被改名同步
+    final t = await model.createTodo(tagName: 'work');
+    expect(await model.renameTag(tagId, 'Job'), isNull);
+    expect(model.byId(t.id)!.tags, ['Job']);
+    // 大小写变体同样被彻底删除移除
+    final t2 = await model.createTodo(tagName: 'JOB');
+    await model.trashTag(tagId);
+    await model.purgeTag(tagId);
+    expect(model.byId(t.id)!.tags, isEmpty);
+    expect(model.byId(t2.id)!.tags, isEmpty);
+  });
+
+  test('remainingDays 与 30 天口径一致', () async {
+    final model = AppModel(store);
+    await model.load();
+    expect(model.remainingDays(DateTime.now()), TodoStore.retentionDays);
+    expect(
+        model.remainingDays(
+            DateTime.now().subtract(const Duration(days: 29, hours: 12))),
+        1); // 最后一天显示 1
+    expect(
+        model.remainingDays(
+            DateTime.now().subtract(const Duration(days: 30))),
+        0); // 到期当天显示 0
+    expect(
+        model.remainingDays(
+            DateTime.now().subtract(const Duration(days: 31))),
+        0);
+  });
+
   test('到期清理递增内容版本号（同步哈希缓存依赖）', () async {
     final model = AppModel(store);
     await model.load();

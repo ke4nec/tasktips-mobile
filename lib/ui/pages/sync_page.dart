@@ -294,15 +294,31 @@ class _SyncPageState extends State<SyncPage> {
             color: a.dangerContainer,
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.pause_circle_outline, size: 20, color: a.danger),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                        '自动同步已暂停（${sync.state.submitPaused}）。请重新登录或手动同步恢复。',
-                        style: TextStyle(fontSize: 13, color: a.danger)),
+                  Row(
+                    children: [
+                      Icon(Icons.pause_circle_outline,
+                          size: 20, color: a.danger),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                            '自动同步已暂停（${sync.state.submitPaused}）。请重新登录或手动同步恢复。',
+                            style:
+                                TextStyle(fontSize: 13, color: a.danger)),
+                      ),
+                    ],
                   ),
+                  // 终局失效（凭据已清空）时一键回到登录表单，本地内容保留
+                  if (sync.status == SyncStatus.disconnected)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: () => sync.logout(),
+                        child: const Text('重新登录'),
+                      ),
+                    ),
                 ],
               ),
             ),

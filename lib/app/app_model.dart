@@ -160,7 +160,8 @@ class AppModel extends ChangeNotifier {
   }
 
   /// 统一写入流程：先落盘成功再更新内存并广播；失败抛错且内存保持原状。
-  Future<void> writeTodo(Todo updated) async {
+  /// [autosync] 供批量调用方关闭逐条触发，改由调用方在全部成功后触发一次。
+  Future<void> writeTodo(Todo updated, {bool autosync = true}) async {
     updated.updatedAt = DateTime.now().toUtc();
     updated.revision += 1;
     // 内存态同样保证 0-3 不变量：非法值钳制，永不落盘脏数据
@@ -170,7 +171,7 @@ class AppModel extends ChangeNotifier {
     final i = todos.indexWhere((t) => t.id == updated.id);
     if (i >= 0) todos[i] = updated;
     notifyListeners();
-    scheduleAutoSync();
+    if (autosync) scheduleAutoSync();
   }
 
   Future<void> setCompleted(String id, bool completed) async {
@@ -228,14 +229,18 @@ class AppModel extends ChangeNotifier {
       (tryParseRfc3339(rfc3339) ?? DateTime.now()).isBefore(cutoff);
 
   /// deletedAt 接受 RFC3339 字符串（分类实体）或 DateTime（Todo）。
+  /// 语义：距到期时刻向上取整（最后一天显示 1，到期当天显示 0），
+  /// 与 purgeExpiredTrash 的严格 30 天口径一致。
   int remainingDays(Object deletedAt) {
     final d = (deletedAt is DateTime
             ? deletedAt
             : DateTime.tryParse(deletedAt as String))!
         .toLocal();
     final expiry = d.add(const Duration(days: TodoStore.retentionDays));
-    final left = expiry.difference(DateTime.now()).inDays + 1;
-    return left.clamp(0, TodoStore.retentionDays);
+    final left = expiry.difference(DateTime.now());
+    return (left.inSeconds / Duration.secondsPerDay)
+        .ceil()
+        .clamp(0, TodoStore.retentionDays);
   }
 
   /// 到期清理：应用启动 / 前台恢复时调用。
@@ -540,14 +545,24 @@ class AppModel extends ChangeNotifier {
     if (err != null) return err;
     final old = t.name;
     t.name = name.trim();
-    // 同步更新关联 Todo（含回收站内容）
+    // 同步更新关联 Todo（含回收站内容）：标签名按 Unicode 小写折叠匹配
+    //（桌面 name_key 语义），批量逐条落盘后只触发一次自动同步
+    final oldLower = old.toLowerCase();
+    var touched = false;
     for (final todo in todos) {
-      if (todo.tags.contains(old)) {
-        final i = todo.tags.indexOf(old);
-        todo.tags[i] = t.name;
-        await writeTodo(todo);
+      var hit = false;
+      for (var i = 0; i < todo.tags.length; i++) {
+        if (todo.tags[i].toLowerCase() == oldLower) {
+          todo.tags[i] = t.name;
+          hit = true;
+        }
+      }
+      if (hit) {
+        await writeTodo(todo, autosync: false);
+        touched = true;
       }
     }
+    if (touched) scheduleAutoSync();
     await _saveClassification();
     return null;
   }
@@ -593,12 +608,18 @@ class AppModel extends ChangeNotifier {
     final t = classification.tagById(id);
     if (t == null) return;
     final name = t.name;
+    final lower = name.toLowerCase();
     classification.tags.removeWhere((e) => e.id == id);
+    var touched = false;
     for (final todo in todos) {
-      if (todo.tags.remove(name)) {
-        await writeTodo(todo);
+      final before = todo.tags.length;
+      todo.tags.removeWhere((e) => e.toLowerCase() == lower);
+      if (todo.tags.length != before) {
+        await writeTodo(todo, autosync: false);
+        touched = true;
       }
     }
+    if (touched) scheduleAutoSync();
     await _saveClassification();
   }
 

@@ -145,6 +145,31 @@ void main() {
     });
   });
 
+  group('显式标题排序等标题时按 id 稳定决胜', () {
+    test('升序/降序下等标题顺序一致', () {
+      Todo titled(String id) => Todo(
+            id: id,
+            title: '相同标题',
+            body: id,
+            createdAt: DateTime.utc(2026, 1, 1),
+            updatedAt: DateTime.utc(2026, 1, 1),
+            deviceId: 'dev',
+          );
+      final todos = [titled('b-id'), titled('a-id'), titled('c-id')];
+      for (final order in [SortOrder.asc, SortOrder.desc]) {
+        final r = runQuery(
+            todos,
+            TodoQuery(
+                view: TodoView.all,
+                defaultSort: false,
+                sortKey: SortKey.title,
+                sortOrder: order),
+            today: '2026-09-17');
+        expect(r.map((t) => t.id), ['a-id', 'b-id', 'c-id']);
+      }
+    });
+  });
+
   group('图片导入校验', () {
     late Directory dir;
     late TodoStore store;
