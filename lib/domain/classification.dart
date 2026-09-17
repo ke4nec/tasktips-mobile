@@ -225,16 +225,40 @@ class Classification {
     return c;
   }
 
-  /// v1/v2 → v3：时间戳/未知字段默认值已在 fromJson 完成；
-  /// v1 默认灰标签按桌面 v1→v2 迁移回填未占用色（语义色键已在 _normalizeColor 映射）。
+  /// v1/v2 → v3：时间戳/未知字段默认值已在 fromJson 完成。
+  /// v1：默认灰标签视为未赋色，回填未占用色（桌面 v1→v2 迁移；桌面随机
+  /// 取色、本端顺序取色，迁移值允许不同）。v2 起灰色是合法赋值，不再回填。
+  /// 随后按桌面 migrate_v2_to_v3 语义去重：每色保留首个，重复者改派未占用色。
   static void _migrateLegacy(Classification c) {
-    final used = c.tags.map((t) => t.color).toSet();
-    final unused = kColorPalette.where((p) => !used.contains(p)).toList();
-    var i = 0;
-    for (final t in c.tags) {
-      if (t.color == kDefaultColor && i < unused.length) {
-        t.color = unused[i++];
+    if (c.schemaVersion <= 1) {
+      final used = c.tags.map((t) => t.color).toSet();
+      final unused = kColorPalette.where((p) => !used.contains(p)).toList();
+      var i = 0;
+      for (final t in c.tags) {
+        if (t.color == kDefaultColor && i < unused.length) {
+          t.color = unused[i++];
+        }
       }
+    }
+    // 去重（桌面 migrate_v2_to_v3 同构）：先收集全部原有互异色，
+    // 再对重复标签改派未占用色——重派色不可能与任何原色冲突
+    final distinct = <String>{};
+    final duplicated = <Tag>[];
+    for (final t in c.tags) {
+      if (!distinct.add(t.color)) duplicated.add(t);
+    }
+    final used = distinct;
+    for (final t in duplicated) {
+      var assigned = false;
+      for (final p in kColorPalette) {
+        if (!used.contains(p)) {
+          t.color = p;
+          used.add(p);
+          assigned = true;
+          break;
+        }
+      }
+      if (!assigned) t.color = kDefaultColor; // 色板耗尽（>32 标签）：退默认灰
     }
   }
 

@@ -135,4 +135,21 @@ void main() {
     expect(raw.contains('"schemaVersion": 3'), isTrue);
     expect(model.classification.dirty, isFalse); // 保存后清除
   });
+
+  test('v2 重复标签色迁移去重（桌面 migrate_v2_to_v3 语义）', () {
+    // 两个标签同色 #4a9eff：首个保留，重复者改派未占用色
+    const v2 = '{"schemaVersion": 2, "categories": [], "tags": ['
+        '{"id": "t1", "name": "甲", "color": "#4a9eff", '
+        '"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}, '
+        '{"id": "t2", "name": "乙", "color": "#4a9eff", '
+        '"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}, '
+        '{"id": "t3", "name": "丙", "color": "#8a8a8a", '
+        '"createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z"}]}';
+    final c = Classification.fromJson(
+        (jsonDecode(v2) as Map).cast<String, Object?>());
+    final colors = c.tags.map((t) => t.color).toList();
+    expect(colors.toSet().length, colors.length); // 无重复
+    expect(colors[0], '#4a9eff'); // 首个保留
+    expect(colors[2], '#8a8a8a'); // 原本不重复的保持
+  });
 }
