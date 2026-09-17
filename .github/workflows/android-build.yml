@@ -1,11 +1,9 @@
 name: Android CI
 
+# 仅 v* 标签推送触发完整流水线（check → build → Release → cleanup）
 on:
   push:
-    branches: [master]
     tags: ['v*']
-  pull_request:
-    branches: [master]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -62,8 +60,7 @@ jobs:
   build:
     name: 构建 arm64 APK
     needs: check
-    # 仅标签（发布）或手动推送到 main 时构建；PR 只跑检查
-    if: github.event_name == 'push'
+    # 触发器已限定 v* 标签推送，此处必然是发布构建
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -126,15 +123,11 @@ jobs:
 
       - name: 构建 arm64-v8a release APK
         run: |
-          ARGS=""
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            ARGS="--build-name=${GITHUB_REF_NAME#v}"
-          fi
           flutter build apk --release \
             --target-platform android-arm64 \
             --split-per-abi \
             --build-number=${{ github.run_number }} \
-            $ARGS
+            --build-name=${GITHUB_REF_NAME#v}
           ls -lh build/app/outputs/flutter-apk/
 
       # 仅保留 1 天，发布完成后由 cleanup 作业立即删除
@@ -146,9 +139,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-      # ---------- 发布：仅 v* 标签 ----------
+      # ---------- 发布：流水线仅由 v* 标签触发，直接发布 ----------
       - name: 发布到 GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
