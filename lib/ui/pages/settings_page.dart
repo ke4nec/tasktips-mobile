@@ -20,7 +20,7 @@ class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key, required this.model, this.active = true});
 
   // 与 pubspec.yaml versionName 保持一致
-  static const appVersion = '0.0.2';
+  static const appVersion = '0.0.3';
 
   @override
   Widget build(BuildContext context) {
