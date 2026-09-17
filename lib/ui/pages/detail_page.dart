@@ -37,6 +37,8 @@ class _DetailPageState extends State<DetailPage> {
   bool _closing = false;
   _SaveState _saveState = _SaveState.saved;
   bool _imeComposing = false; // 输入法组合期：不落盘、不派生标题
+  // 正在把远端/外部写入同步进输入框：此时 text 变更不算本地编辑
+  bool _applyingExternal = false;
   int _cbCounter = 0;
   // 待保存的最新快照（比已提交保存更新的内容在此排队）
   Todo? _pendingSnapshot;
@@ -50,6 +52,9 @@ class _DetailPageState extends State<DetailPage> {
     super.initState();
     _bodyCtrl.text = m.byId(_id)?.body ?? '';
     _bodyCtrl.addListener(_onBodyChanged);
+    // 完成按钮、元数据写入与后台同步 pull 都会 notifyListeners：
+    // 监听 model 使页面随外部写入刷新（设计 §2 统一写入契约的 UI 面）
+    m.addListener(_onModelChanged);
     _bodyFocus.addListener(() {
       if (_bodyFocus.hasFocus) setState(() {});
     });
@@ -59,6 +64,8 @@ class _DetailPageState extends State<DetailPage> {
 
   @override
   void dispose() {
+    // 先移除监听再触发落盘写，避免写通知打到已销毁的 State
+    m.removeListener(_onModelChanged);
     // 离开页面立即刷新待保存内容（进程终止可能收不到回调，故不能只依赖此处）
     _flushSync();
     _debounce?.cancel();
@@ -68,8 +75,24 @@ class _DetailPageState extends State<DetailPage> {
     super.dispose();
   }
 
+  /// 外部写入（完成/元数据/后台同步）后的页面刷新。
+  /// 仅在本机无待保存编辑且不在输入法组合期时同步正文到输入框；
+  /// 有待保存内容时只刷新元数据，禁止替换正在输入的正文（设计 §4.3）。
+  void _onModelChanged() {
+    if (!mounted || _closing) return;
+    final t = m.byId(_id);
+    final noPendingEdits =
+        _saveState == _SaveState.saved || _saveState == _SaveState.none;
+    if (t != null && noPendingEdits && !_imeComposing && t.body != _bodyCtrl.text) {
+      _applyingExternal = true;
+      _bodyCtrl.text = t.body;
+      _applyingExternal = false;
+    }
+    setState(() {});
+  }
+
   void _onBodyChanged() {
-    if (_closing) return;
+    if (_closing || _applyingExternal) return;
     // 输入法组合期间不重设内容/不触发保存；组合结束会再次回调
     final range = _bodyCtrl.value.composing;
     _imeComposing = range.isValid && range != TextRange.empty;
@@ -144,9 +167,13 @@ class _DetailPageState extends State<DetailPage> {
         _saveState == _SaveState.failed) {
       final t = m.byId(_id);
       if (t != null && t.body != _bodyCtrl.text && !_imeComposing) {
-        // dispose 里不能 await；写盘 future 自行完成，失败内容仍在正文控件销毁前已排队
-        m.writeTodo(t.copyWith(body: _bodyCtrl.text));
+        // dispose 里不能 await：入队后交给串行保存队列异步完成，
+        // 与在飞保存保序（避免两笔直写竞争完成顺序）
+        _pendingSnapshot = t.copyWith(body: _bodyCtrl.text);
       }
+    }
+    if (_pendingSnapshot != null) {
+      unawaited(_drainSaves());
     }
   }
 
@@ -156,31 +183,33 @@ class _DetailPageState extends State<DetailPage> {
       _bodyFocus.unfocus();
       return false;
     }
-    // 保存失败时不能丢弃正文返回
+    // 保存失败时不能丢弃正文返回（设计 §2：失败停留编辑页并提供重试）
     if (_saveState == _SaveState.failed) {
       final retry = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('尚未保存'),
-          content: const Text('正文保存失败，返回会保留在本机重试。是否重试保存后再返回？'),
+          content: const Text('正文保存失败。返回前会再次尝试保存；仍失败时将停留在本页，正文不会丢弃。'),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('直接返回')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('重试保存')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('留在本页')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('尝试保存并返回')),
           ],
         ),
       );
-      if (retry == true) {
-        await _drainSaves();
-        if (_saveState == _SaveState.failed) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('仍未保存成功，内容已保留待重试')));
-          }
-          return false;
-        }
-        return true;
+      if (retry != true) return false;
+      final t = m.byId(_id);
+      if (t != null && t.body != _bodyCtrl.text && !_imeComposing) {
+        _pendingSnapshot = t.copyWith(body: _bodyCtrl.text);
       }
-      return true; // 直接返回：内容保留在待保存快照中，不丢弃
+      await _drainSaves();
+      if (_saveState == _SaveState.failed) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('仍未保存成功，已停留在编辑页，内容已保留待重试')));
+        }
+        return false;
+      }
+      return true;
     }
     _closing = true;
     _debounce?.cancel();
@@ -296,14 +325,19 @@ class _DetailPageState extends State<DetailPage> {
                           a: a),
                       checkboxBuilder: (checked) {
                         final idx = _cbCounter++;
-                        return InkWell(
-                          onTap: () => _toggleTask(idx),
-                          child: Icon(
-                            checked
-                                ? Icons.check_box
-                                : Icons.check_box_outline_blank,
-                            size: 18,
-                            color: checked ? a.brand : a.muted,
+                        return Semantics(
+                          checked: checked,
+                          label: checked ? '已完成任务' : '未完成任务',
+                          button: true,
+                          child: InkWell(
+                            onTap: () => _toggleTask(idx),
+                            child: Icon(
+                              checked
+                                  ? Icons.check_box
+                                  : Icons.check_box_outline_blank,
+                              size: 18,
+                              color: checked ? a.brand : a.muted,
+                            ),
                           ),
                         );
                       },
@@ -430,7 +464,8 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _pickPriority() async {
-    final t = m.byId(_id)!;
+    final t = m.byId(_id);
+    if (t == null || !mounted) return;
     final p = await showModalBottomSheet<int>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -449,13 +484,15 @@ class _DetailPageState extends State<DetailPage> {
         ),
       ),
     );
-    if (p != null) {
-      await m.writeTodo(t.copyWith(priority: p));
-    }
+    // 弹层期间对象可能被后台同步删除/清理：重取最新再写
+    final cur = m.byId(_id);
+    if (p == null || cur == null || !mounted) return;
+    await m.writeTodo(cur.copyWith(priority: p));
   }
 
   Future<void> _pickDueDate() async {
-    final t = m.byId(_id)!;
+    final t = m.byId(_id);
+    if (t == null || !mounted) return;
     // 设计稿日期 sheet：清除 / 完成 两个显式入口（替代“选同日清空”的隐式逻辑）
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -481,7 +518,9 @@ class _DetailPageState extends State<DetailPage> {
       ),
     );
     if (action == 'clear') {
-      await m.writeTodo(t.copyWith(clearDueDate: true));
+      final cur = m.byId(_id);
+      if (cur == null || !mounted) return;
+      await m.writeTodo(cur.copyWith(clearDueDate: true));
       return;
     }
     if (action != 'pick') return;
@@ -496,16 +535,18 @@ class _DetailPageState extends State<DetailPage> {
       lastDate: DateTime(2100),
       helpText: '选择截止日期',
     );
-    if (d != null) {
-      final s = '${d.year.toString().padLeft(4, '0')}-'
-          '${d.month.toString().padLeft(2, '0')}-'
-          '${d.day.toString().padLeft(2, '0')}';
-      await m.writeTodo(t.copyWith(dueDate: s));
-    }
+    if (d == null) return;
+    final s = '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+    final cur = m.byId(_id);
+    if (cur == null || !mounted) return;
+    await m.writeTodo(cur.copyWith(dueDate: s));
   }
 
   Future<void> _pickCategory() async {
-    final t = m.byId(_id)!;
+    final t = m.byId(_id);
+    if (t == null || !mounted) return;
     final id = await showModalBottomSheet<String?>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -530,9 +571,11 @@ class _DetailPageState extends State<DetailPage> {
       ),
     );
     if (id != null) {
+      final cur = m.byId(_id);
+      if (cur == null || !mounted) return;
       await m.writeTodo(id.isEmpty
-          ? t.copyWith(clearCategoryId: true)
-          : t.copyWith(categoryId: id));
+          ? cur.copyWith(clearCategoryId: true)
+          : cur.copyWith(categoryId: id));
     }
   }
 
@@ -550,7 +593,8 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _pickTags() async {
-    final t = m.byId(_id)!;
+    final t = m.byId(_id);
+    if (t == null || !mounted) return;
     final selected = List.of(t.tags);
     await showModalBottomSheet<void>(
       context: context,
@@ -610,7 +654,9 @@ class _DetailPageState extends State<DetailPage> {
         );
       },
     );
-    await m.writeTodo(t.copyWith(tags: selected));
+    final cur = m.byId(_id);
+    if (cur == null || !mounted) return;
+    await m.writeTodo(cur.copyWith(tags: selected));
     if (mounted) setState(() {});
   }
 
@@ -757,7 +803,8 @@ class _DetailPageState extends State<DetailPage> {
 /// 预览本地图片：仅渲染 images/ 下的本机文件；网络图、非法引用与缺失文件
 /// 沿用占位（设计：预览不自动加载网络图片）。
 /// 路径规范化后必须仍在 imagesDir 内，防 `../` 穿越到应用目录外。
-class _PreviewImage extends StatelessWidget {
+/// 文件解析在 initState/didUpdateWidget 做一次，不在 build 中查文件系统。
+class _PreviewImage extends StatefulWidget {
   final AppModel model;
   final Uri uri;
   final String alt;
@@ -768,15 +815,36 @@ class _PreviewImage extends StatelessWidget {
       required this.alt,
       required this.a});
 
+  @override
+  State<_PreviewImage> createState() => _PreviewImageState();
+}
+
+class _PreviewImageState extends State<_PreviewImage> {
+  File? _file;
+
+  @override
+  void initState() {
+    super.initState();
+    _file = _resolve();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PreviewImage old) {
+    super.didUpdateWidget(old);
+    if (old.uri != widget.uri || old.model != widget.model) {
+      _file = _resolve();
+    }
+  }
+
   File? _resolve() {
     try {
-      if (uri.hasScheme) return null; // http/https/data 等一律不加载
-      var path = Uri.decodeComponent(uri.path);
+      if (widget.uri.hasScheme) return null; // http/https/data 等一律不加载
+      var path = Uri.decodeComponent(widget.uri.path);
       if (path.startsWith('/')) path = path.substring(1);
       if (!path.startsWith('images/')) return null;
-      final base = p.normalize(model.store.imagesDir.path);
+      final base = p.normalize(widget.model.store.imagesDir.path);
       final abs =
-          p.normalize(p.join(model.store.tipsDir.path, path));
+          p.normalize(p.join(widget.model.store.tipsDir.path, path));
       if (abs != base && !abs.startsWith('$base${p.separator}')) {
         return null;
       }
@@ -789,8 +857,8 @@ class _PreviewImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final f = _resolve();
-    if (f == null) return _ImagePlaceholder(a: a, alt: alt);
+    final f = _file;
+    if (f == null) return _ImagePlaceholder(a: widget.a, alt: widget.alt);
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       child: ClipRRect(
@@ -799,7 +867,7 @@ class _PreviewImage extends StatelessWidget {
           f,
           fit: BoxFit.contain,
           errorBuilder: (_, _, _) =>
-              _ImagePlaceholder(a: a, alt: alt),
+              _ImagePlaceholder(a: widget.a, alt: widget.alt),
         ),
       ),
     );

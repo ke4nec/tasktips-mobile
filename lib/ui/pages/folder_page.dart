@@ -72,43 +72,41 @@ class _FolderPageState extends State<FolderPage> {
         subtitle: '点右上角 + 新建目录，最多三级',
       );
     }
-    return ListView(
-      children: [
-        _categoryRow(context, null),
-        for (final c in roots) ..._categorySubtree(context, c, 0),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-          child: Text('点按进入分类列表，在右上角管理名称。',
-              style: TextStyle(
-                  fontSize: 12,
-                  color: appColors(context, Theme.of(context).brightness).muted)),
-        ),
-      ],
-    );
-  }
+    // 展平为行数据，ListView.builder 惰性构建（目录数百条时避免全量首帧构建）
+    final rows = <(Category?, int)>[(null, 0)];
+    void addSubtree(Category c, int depth) {
+      rows.add((c, depth));
+      for (final child in m.childCategories(c.id)) {
+        addSubtree(child, depth + 1);
+      }
+    }
 
-  List<Widget> _categorySubtree(BuildContext context, Category c, int depth) {
-    final m = widget.model;
-    return [
-      _categoryRow(context, c, depth: depth),
-      for (final child in m.childCategories(c.id))
-        ..._categorySubtree(context, child, depth + 1),
-    ];
+    for (final c in roots) {
+      addSubtree(c, 0);
+    }
+    return ListView.builder(
+      itemCount: rows.length + 1, // 尾部说明行
+      itemBuilder: (context, i) {
+        if (i == rows.length) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+            child: Text('点按进入分类列表，在右上角管理名称。',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: appColors(context, Theme.of(context).brightness).muted)),
+          );
+        }
+        final (c, depth) = rows[i];
+        return _categoryRow(context, c, depth: depth);
+      },
+    );
   }
 
   Widget _categoryRow(BuildContext context, Category? c, {int depth = 0}) {
     final m = widget.model;
     final a = appColors(context, Theme.of(context).brightness);
-    // 未分类行（含指向已删目录的 Todo）显示总数；目录行按设计稿显示“N 项未完成”
-    final uncategorized = m.todos
-        .where((t) =>
-            !t.isDeleted &&
-            (t.categoryId == null ||
-                t.categoryId!.isEmpty ||
-                m.classification.isUncategorized(t.categoryId)))
-        .length;
-    final openCount = c == null ? null : m.openTodoCountInCategory(c.id);
-    final count = c == null ? uncategorized : openCount;
+    // 未分类行（含指向已删目录的 Todo）显示总数（缓存）；目录行显示“N 项未完成”
+    final count = c == null ? m.uncategorizedTodoCount : m.openTodoCountInCategory(c.id);
     return InkWell(
       onTap: () => openSecondaryPage(
         context,
@@ -270,6 +268,11 @@ class _FolderPageState extends State<FolderPage> {
 
   // ---------- 标签 ----------
 
+  /// 标签列表行模型：组标题 / 空分组占位 / 标签行。
+  /// 展平后交给 ListView.builder 惰性构建。
+  static const _tagHeader = '__header__';
+  static const _tagEmptyGroup = '__empty__';
+
   Widget _tagList(BuildContext context) {
     final m = widget.model;
     final a = appColors(context, Theme.of(context).brightness);
@@ -281,31 +284,45 @@ class _FolderPageState extends State<FolderPage> {
         subtitle: '点右上角 + 新建标签',
       );
     }
-    return ListView(
-      children: [
-        for (final e in groups.entries) ...[
-          Padding(
+    final rows = <({String kind, String group, Tag? tag})>[];
+    for (final e in groups.entries) {
+      rows.add((kind: _tagHeader, group: e.key, tag: null));
+      if (e.value.isEmpty) {
+        rows.add((kind: _tagEmptyGroup, group: e.key, tag: null));
+      } else {
+        for (final tag in e.value) {
+          rows.add((kind: 'tag', group: e.key, tag: tag));
+        }
+      }
+    }
+    final openByTag = m.openCountByTag;
+    return ListView.builder(
+      itemCount: rows.length,
+      itemBuilder: (context, i) {
+        final r = rows[i];
+        if (r.kind == _tagHeader) {
+          return Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 4, 4),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(e.key,
+                  child: Text(r.group,
                       style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
                           color: a.muted)),
                 ),
                 // 默认组不可重命名/删除（桌面 classification_service 语义）
-                if (e.key != kDefaultTagGroup)
+                if (r.group != kDefaultTagGroup)
                   PopupMenuButton<String>(
                     tooltip: '管理分组',
                     icon: Icon(Icons.more_horiz,
                         size: 20, color: a.muted),
                     onSelected: (v) {
                       if (v == 'rename') {
-                        _editTagGroup(context, e.key);
+                        _editTagGroup(context, r.group);
                       } else {
-                        _deleteTagGroup(context, e.key);
+                        _deleteTagGroup(context, r.group);
                       }
                     },
                     itemBuilder: (_) => const [
@@ -317,62 +334,62 @@ class _FolderPageState extends State<FolderPage> {
                   ),
               ],
             ),
+          );
+        }
+        if (r.kind == _tagEmptyGroup) {
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text('空分组',
+                style: TextStyle(fontSize: 12, color: a.muted)),
+          );
+        }
+        final tag = r.tag!;
+        return InkWell(
+          onTap: () => openSecondaryPage(
+            context,
+            TagTodoList(model: m, tag: tag),
           ),
-          if (e.value.isEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text('空分组',
-                  style: TextStyle(fontSize: 12, color: a.muted)),
-            ),
-          for (final tag in e.value)
-            InkWell(
-              onTap: () => openSecondaryPage(
-                context,
-                TagTodoList(model: m, tag: tag),
-              ),
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 72),
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                    border: Border(bottom: BorderSide(color: a.line))),
-                child: Row(
-                  children: [
-                    Icon(Icons.tag, size: 22, color: a.purple),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(tag.name,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w500)),
-                    ),
-                    Text(
-                        '${m.todos.where((t) => !t.isDeleted && !t.isCompleted && t.tags.contains(tag.name)).length} 项未完成',
-                        style: TextStyle(color: a.muted, fontSize: 13)),
-                    PopupMenuButton<String>(
-                      onSelected: (v) async {
-                        switch (v) {
-                          case 'rename':
-                            _editTag(context, tag);
-                          case 'color':
-                            _pickColor(context, isCategory: false, id: tag.id);
-                          case 'group':
-                            _setTagGroup(context, tag);
-                          case 'delete':
-                            _deleteTag(context, tag);
-                        }
-                      },
-                      itemBuilder: (_) => const [
-                        PopupMenuItem(value: 'rename', child: Text('重命名')),
-                        PopupMenuItem(value: 'color', child: Text('颜色')),
-                        PopupMenuItem(value: 'group', child: Text('设置分组')),
-                        PopupMenuItem(value: 'delete', child: Text('删除')),
-                      ],
-                    ),
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 72),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+                border: Border(bottom: BorderSide(color: a.line))),
+            child: Row(
+              children: [
+                Icon(Icons.tag, size: 22, color: a.purple),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(tag.name,
+                      style: const TextStyle(
+                          fontSize: 16, fontWeight: FontWeight.w500)),
+                ),
+                Text('${openByTag[tag.name] ?? 0} 项未完成',
+                    style: TextStyle(color: a.muted, fontSize: 13)),
+                PopupMenuButton<String>(
+                  onSelected: (v) async {
+                    switch (v) {
+                      case 'rename':
+                        _editTag(context, tag);
+                      case 'color':
+                        _pickColor(context, isCategory: false, id: tag.id);
+                      case 'group':
+                        _setTagGroup(context, tag);
+                      case 'delete':
+                        _deleteTag(context, tag);
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem(value: 'rename', child: Text('重命名')),
+                    PopupMenuItem(value: 'color', child: Text('颜色')),
+                    PopupMenuItem(value: 'group', child: Text('设置分组')),
+                    PopupMenuItem(value: 'delete', child: Text('删除')),
                   ],
                 ),
-              ),
+              ],
             ),
-        ],
-      ],
+          ),
+        );
+      },
     );
   }
 

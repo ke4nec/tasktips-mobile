@@ -63,7 +63,12 @@ class _HistoryPageState extends State<HistoryPage> {
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = e.toString());
+      // 失败时停止自动翻页：尾项触发器依赖 _hasMore，保持 true 会在
+      // rebuild 时每帧重发请求（网络断开时形成请求风暴）
+      setState(() {
+        _error = e.toString();
+        _hasMore = false;
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -105,11 +110,22 @@ class _HistoryPageState extends State<HistoryPage> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.all(16),
-              child: Text(_error!,
-                  style: TextStyle(fontSize: 13, color: a.danger)),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(_error!,
+                        style: TextStyle(fontSize: 13, color: a.danger)),
+                  ),
+                  TextButton.icon(
+                    onPressed: _loading ? null : _loadMore,
+                    icon: const Icon(Icons.refresh, size: 18),
+                    label: const Text('重试'),
+                  ),
+                ],
+              ),
             ),
           Expanded(
-            child: _items.isEmpty && !_loading
+            child: _items.isEmpty && !_loading && _error == null
                 ? Center(
                     child: Text('暂无历史记录',
                         style: TextStyle(fontSize: 13, color: a.muted)))
@@ -188,29 +204,37 @@ class _HistoryPageState extends State<HistoryPage> {
       BuildContext context, String kind, String hash) async {
     final sync = widget.model.sync;
     if (sync == null) return;
+    // 记录 loading 弹层自己的 context：用户可能已用返回键关闭它，
+    // 此时不得再 pop（否则会误关历史页本身）
+    BuildContext? loadingCtx;
     showDialog(
       context: context,
-      builder: (_) => const AlertDialog(
-        content: SizedBox(
-            height: 48,
-            width: 48,
-            child: Center(child: CircularProgressIndicator())),
-      ),
+      builder: (dctx) {
+        loadingCtx = dctx;
+        return const AlertDialog(
+          content: SizedBox(
+              height: 48,
+              width: 48,
+              child: Center(child: CircularProgressIndicator())),
+        );
+      },
     );
     final bytes = await sync.fetchHistoryPayload(hash);
-    if (!context.mounted) return;
-    Navigator.of(context).pop(); // 关闭 loading
+    if (loadingCtx != null && loadingCtx!.mounted) {
+      Navigator.of(loadingCtx!).pop(); // 仅在弹层仍打开时关闭
+    }
+    if (!mounted) return;
     if (bytes == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(this.context).showSnackBar(
           SnackBar(content: Text(sync.lastError ?? '正文加载失败')));
       return;
     }
     final text = kind == 'image'
         ? '二进制图片（${bytes.length} 字节），此处不直接展示。'
         : utf8.decode(bytes, allowMalformed: true);
-    if (!context.mounted) return;
+    if (!mounted) return;
     showDialog(
-      context: context,
+      context: this.context,
       builder: (ctx) => AlertDialog(
         title: const Text('历史正文（只读）'),
         content: SizedBox(

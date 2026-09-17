@@ -157,6 +157,9 @@ class _InboxPageState extends State<InboxPage>
               Expanded(
                 child: reorderable
                     ? ReorderableListView.builder(
+                        // 与普通列表共用 PageStorageKey：筛选/排序切换分支时
+                        // 保持滚动位置（两分支是不同控件树，靠 PageStorage 恢复）
+                        key: const PageStorageKey('inbox-list'),
                         padding: const EdgeInsets.only(top: 4),
                         itemCount: list.length,
                         // onReorderItem 已按移除语义调整 newIndex，无需手动 -1
@@ -172,6 +175,7 @@ class _InboxPageState extends State<InboxPage>
                         ),
                       )
                     : ListView.builder(
+                        key: const PageStorageKey('inbox-list'),
                         controller: _scrollCtrl,
                         padding: const EdgeInsets.only(top: 4),
                         itemCount: list.length,
@@ -237,6 +241,13 @@ class _InboxPageState extends State<InboxPage>
         model: widget.model,
         query: _q,
         onChanged: () => setState(() {}),
+        // “清除筛选”同时清搜索词：同步清空搜索框，保证按钮语义完整
+        onResetSearch: () {
+          _searchDebounce?.cancel();
+          _searchCtrl.clear();
+          _q.search = null;
+          setState(() {});
+        },
       ),
     );
   }
@@ -246,7 +257,8 @@ class _FilterSheet extends StatefulWidget {
   final AppModel model;
   final TodoQuery query;
   final VoidCallback onChanged;
-  const _FilterSheet({required this.model, required this.query, required this.onChanged});
+  final VoidCallback? onResetSearch;
+  const _FilterSheet({required this.model, required this.query, required this.onChanged, this.onResetSearch});
 
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
@@ -282,6 +294,10 @@ class _FilterSheetState extends State<_FilterSheet> {
                   q.dueFrom = null;
                   q.dueTo = null;
                   q.defaultSort = true;
+                  if (q.search != null && q.search!.isNotEmpty) {
+                    q.search = null;
+                    widget.onResetSearch?.call();
+                  }
                   setState(() {});
                 },
                 child: const Text('清除筛选'),

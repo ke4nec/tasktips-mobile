@@ -512,15 +512,13 @@ class _SyncPageState extends State<SyncPage> {
   Widget _statusCard(BuildContext context, AppColors a, SyncEngine sync) {
     // "待同步"：已连接/已同步但存在未上传的本机变更（§4.3 六态）
     final unsynced = !sync.busy && sync.hasUnsyncedChanges;
+    final hasConflicts = sync.state.conflicts.any((c) => !c.resolved);
+    // 冲突态视觉强度统一用 danger：connected+未解决冲突不再用 brandInk 弱化
     final (label, color) = switch (sync.status) {
       SyncStatus.syncing => ('同步中…', a.brandInk),
       SyncStatus.connected => (
-          sync.state.conflicts.any((c) => !c.resolved)
-              ? '有冲突待处理'
-              : unsynced
-                  ? '待同步'
-                  : '已连接',
-          a.brandInk),
+          hasConflicts ? '有冲突待处理' : unsynced ? '待同步' : '已连接',
+          hasConflicts ? a.danger : a.brandInk),
       SyncStatus.synced => (unsynced ? '待同步' : '已同步', a.brandInk),
       SyncStatus.conflict => ('有冲突待处理', a.danger),
       SyncStatus.partialFailed => ('部分失败', a.warn),
@@ -555,7 +553,9 @@ class _SyncPageState extends State<SyncPage> {
                   child: CircularProgressIndicator(strokeWidth: 2)),
           ]),
           const SizedBox(height: 4),
-          Text('${sync.state.serverUrl ?? ''} · ${sync.state.email ?? ''}',
+          Text(
+              '${sync.state.serverUrl ?? ''} · ${sync.state.email ?? ''}'
+              '${sync.state.lastSyncAt != null ? ' · 上次同步 ${_fmtLastSync(sync.state.lastSyncAt!)}' : ''}',
               style: TextStyle(fontSize: 13, color: a.muted)),
           if (sync.lastError != null) ...[
             const SizedBox(height: 8),
@@ -568,7 +568,7 @@ class _SyncPageState extends State<SyncPage> {
               child: FilledButton.icon(
                 onPressed: sync.busy ? null : () => sync.syncNow(manual: true),
                 icon: const Icon(Icons.sync),
-                label: const Text('立即同步'),
+                label: Text(sync.status == SyncStatus.error ? '重试同步' : '立即同步'),
               ),
             ),
           ]),
@@ -922,6 +922,19 @@ class _SyncPageState extends State<SyncPage> {
         'bootstrap' => '初始同步',
         _ => d,
       };
+
+  /// 上次同步时间：同日只显示时分，跨日补月-日（设计稿 sync 状态卡副行）。
+  String _fmtLastSync(DateTime t) {
+    final l = t.toLocal();
+    final now = DateTime.now();
+    final hm =
+        '${l.hour.toString().padLeft(2, '0')}:${l.minute.toString().padLeft(2, '0')}';
+    final sameDay =
+        l.year == now.year && l.month == now.month && l.day == now.day;
+    return sameDay
+        ? hm
+        : '${l.month.toString().padLeft(2, '0')}-${l.day.toString().padLeft(2, '0')} $hm';
+  }
 }
 
 /// 高级区：快照与恢复。恢复会影响项目内所有设备；恢复成功后服务端
@@ -938,12 +951,17 @@ class _SnapshotRestoreSection extends StatefulWidget {
 class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
   Future<List<api.Snapshot>>? _snapshotsFuture;
   api.RestoreJob? _job;
+  /// 轮询代次：发起新恢复任务时 +1，旧轮询循环发现代次变化即退出，
+  /// 防止两个 while 循环并发互相覆盖 _job（“取消”作用到看不见的旧任务）。
+  int _pollGen = 0;
   bool _polling = false;
+  String? _pollNotice; // 轮询提前停止的原因（网络错误/超时），提示手动刷新
 
   SyncEngine? get _sync => widget.model.sync;
 
   @override
   void dispose() {
+    _pollGen++;
     _polling = false;
     super.dispose();
   }
@@ -953,23 +971,43 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
       j.status == api.RestoreJobStatusEnum.failed ||
       j.status == api.RestoreJobStatusEnum.cancelled;
 
+  /// 轮询至终态：3 秒间隔，最多 10 分钟；网络错误停止并提示手动刷新。
   Future<void> _poll(String restoreId) async {
+    final gen = ++_pollGen;
     _polling = true;
-    while (_polling && mounted) {
+    _pollNotice = null;
+    var tries = 0;
+    while (mounted && gen == _pollGen) {
       await Future.delayed(const Duration(seconds: 3));
-      if (!_polling || !mounted) return;
+      if (!mounted || gen != _pollGen) return;
+      if (++tries > 200) {
+        // 10 分钟仍未到终态：停止轮询避免长期后台请求，交由用户手动刷新
+        _stopPolling('已持续轮询 10 分钟未到终态，已停止；可点击“刷新状态”继续。');
+        return;
+      }
       try {
         final j = await _sync!.fetchRestore(restoreId);
-        if (j == null || !mounted) return;
+        if (!mounted || gen != _pollGen) return;
+        if (j == null) {
+          _stopPolling('恢复任务查询失败，已停止轮询；可点击“刷新状态”重试。');
+          return;
+        }
         setState(() => _job = j);
         if (_terminal(j)) {
-          _polling = false;
+          if (gen == _pollGen) _polling = false;
           return;
         }
       } catch (_) {
-        return; // 网络失败停止轮询，用户可手动刷新
+        // 网络失败停止轮询；旧状态卡继续展示会误导“仍在跟踪”，给出显式提示
+        _stopPolling('轮询因网络错误停止；可点击“刷新状态”重试。');
+        return;
       }
     }
+  }
+
+  void _stopPolling(String notice) {
+    if (mounted) setState(() => _pollNotice = notice);
+    _polling = false;
   }
 
   @override
@@ -982,6 +1020,12 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
         title: const Text('高级：快照与恢复'),
         subtitle: Text('恢复会影响项目内所有设备',
             style: TextStyle(fontSize: 12, color: a.warn)),
+        // 折叠时不发起网络请求：首次展开才加载快照列表
+        onExpansionChanged: (open) {
+          if (open && _snapshotsFuture == null) {
+            setState(() => _snapshotsFuture = sync.listSnapshots());
+          }
+        },
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
@@ -1011,8 +1055,13 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
                   ],
                 ),
                 FutureBuilder<List<api.Snapshot>>(
-                  future: _snapshotsFuture ??= sync.listSnapshots(),
+                  future: _snapshotsFuture,
                   builder: (context, snap) {
+                    if (_snapshotsFuture == null) {
+                      return Text('展开本区后加载快照列表',
+                          style:
+                              TextStyle(fontSize: 13, color: a.muted));
+                    }
                     if (snap.connectionState == ConnectionState.waiting) {
                       return const Padding(
                         padding: EdgeInsets.all(8),
@@ -1089,6 +1138,12 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
           Text('恢复任务 ${j.status.name}',
               style:
                   const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          if (_pollNotice != null && !_terminal(j))
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(_pollNotice!,
+                  style: TextStyle(fontSize: 12, color: a.warn)),
+            ),
           const SizedBox(height: 4),
           Text(
               '已恢复 ${j.restoredObjects} 对象 / ${j.restoredTombstones} 墓碑'
@@ -1105,9 +1160,22 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
             children: [
               TextButton(
                 onPressed: () async {
-                  final updated = await sync.fetchRestore(j.id);
-                  if (updated != null && mounted) {
-                    setState(() => _job = updated);
+                  try {
+                    final updated = await sync.fetchRestore(j.id);
+                    if (updated != null && mounted) {
+                      setState(() {
+                        _job = updated;
+                        _pollNotice = null;
+                      });
+                      // 手动刷新后未到终态则恢复轮询
+                      if (!_terminal(updated) && !_polling) {
+                        _poll(updated.id);
+                      }
+                    }
+                  } catch (_) {
+                    if (mounted) {
+                      setState(() => _pollNotice = '刷新失败（网络错误），请稍后再试。');
+                    }
                   }
                 },
                 child: const Text('刷新状态'),
@@ -1192,10 +1260,21 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
                     labelText: '恢复原因（必填，1-512 个字符）'),
               ),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('发起恢复'),
-              ),
+                ListenableBuilder(
+                  listenable: reasonCtrl,
+                  builder: (ctx, _) {
+                    // 发起前本地校验（引擎语义）：模式二选一齐全、原因为 1-512 字符
+                    final reasonOk =
+                        SyncEngine.validateRestoreReason(reasonCtrl.text) == null;
+                    final seqOk = int.tryParse(seqCtrl.text.trim()) != null;
+                    final modeOk = bySnapshot ? snapshotId != null : seqOk;
+                    final allOk = reasonOk && modeOk;
+                    return FilledButton(
+                      onPressed: allOk ? () => Navigator.pop(ctx, true) : null,
+                      child: const Text('发起恢复'),
+                    );
+                  },
+                ),
             ],
           ),
         ),
@@ -1206,6 +1285,20 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
     seqCtrl.dispose();
     reasonCtrl.dispose();
     if (ok != true) return;
+    // 网络前二次校验：弹层期间输入可能被输入法提交等边界改变
+    if (bySnapshot && snapshotId == null) {
+      _snack('请先选择快照');
+      return;
+    }
+    if (!bySnapshot && seq == null) {
+      _snack('目标 changeSequence 必须是整数');
+      return;
+    }
+    final reasonErr = SyncEngine.validateRestoreReason(reason);
+    if (reasonErr != null) {
+      _snack(reasonErr);
+      return;
+    }
     final (job, err) = await sync.createRestore(
       snapshotId: bySnapshot ? snapshotId : null,
       targetChangeSequence: bySnapshot ? null : seq,
@@ -1219,6 +1312,13 @@ class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
     if (!mounted) return;
     setState(() => _job = job);
     if (job != null) _poll(job.id);
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    // ignore: unnecessary_this
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(msg)));
   }
 
   Future<void> _cancelSheet(

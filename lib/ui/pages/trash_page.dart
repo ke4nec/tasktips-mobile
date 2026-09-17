@@ -91,10 +91,20 @@ class _TrashPageState extends State<TrashPage> {
                               confirmText: '清空',
                               destructive: true);
                           if (ok) {
-                            await m.emptyTrash();
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('回收站已清空')));
+                            // 清空循环逐条落盘删文件：IO 异常需捕获并提示，
+                            // 不能以未捕获异常中断且无反馈（部分成功也如实提示）
+                            try {
+                              await m.emptyTrash();
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('回收站已清空')));
+                              }
+                            } catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                                    content: Text(
+                                        '清空中断：${e.toString()}；未完成项仍保留在回收站')));
+                              }
                             }
                           }
                         },
@@ -136,8 +146,7 @@ class _TrashPageState extends State<TrashPage> {
       required String title,
       required String subtitle,
       required VoidCallback onRestore,
-      required VoidCallback onPurge,
-      required bool Function() canPurgeNow}) {
+      required VoidCallback onPurge}) {
     final a = appColors(context, Theme.of(context).brightness);
     return Container(
       constraints: const BoxConstraints(minHeight: 72),
@@ -216,7 +225,6 @@ class _TrashPageState extends State<TrashPage> {
                 destructive: true);
             if (ok) await m.purgeTodo(t.id);
           },
-          canPurgeNow: () => true,
         );
       },
     );
@@ -251,7 +259,6 @@ class _TrashPageState extends State<TrashPage> {
                 destructive: true);
             if (ok) await m.purgeCategory(c.id);
           },
-          canPurgeNow: () => true,
         );
       },
     );
@@ -286,7 +293,6 @@ class _TrashPageState extends State<TrashPage> {
                 destructive: true);
             if (ok) await m.purgeTag(t.id);
           },
-          canPurgeNow: () => true,
         );
       },
     );
