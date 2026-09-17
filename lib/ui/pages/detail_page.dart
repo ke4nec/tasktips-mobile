@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -859,6 +860,11 @@ class _PreviewImageState extends State<_PreviewImage> {
   Widget build(BuildContext context) {
     final f = _file;
     if (f == null) return _ImagePlaceholder(a: widget.a, alt: widget.alt);
+    // 按显示宽度解码（cacheWidth）：大照片整图解码是预览卡顿与内存峰值
+    // 的主因；预览布局最宽为屏宽，按物理像素上限解码已足够清晰。
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final decodeWidth = math.max(360, (screenWidth * dpr).round());
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       child: ClipRRect(
@@ -866,6 +872,7 @@ class _PreviewImageState extends State<_PreviewImage> {
         child: Image.file(
           f,
           fit: BoxFit.contain,
+          cacheWidth: decodeWidth,
           errorBuilder: (_, _, _) =>
               _ImagePlaceholder(a: widget.a, alt: widget.alt),
         ),

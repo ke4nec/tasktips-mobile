@@ -49,6 +49,7 @@ class AppModel extends ChangeNotifier {
   Map<String, int>? _countByCategory;
   Map<String, int>? _openCountByCategory;
   Map<String, Set<String>>? _subtreeCache;
+  Map<String, String>? _categoryPathCache;
   Set<String>? _activeCategoryIdsCache;
   int? _uncategorizedCount;
   Map<String, int>? _openCountByTag;
@@ -59,6 +60,7 @@ class AppModel extends ChangeNotifier {
     _countByCategory = null;
     _openCountByCategory = null;
     _subtreeCache = null;
+    _categoryPathCache = null;
     _activeCategoryIdsCache = null;
     _uncategorizedCount = null;
     _openCountByTag = null;
@@ -374,6 +376,11 @@ class AppModel extends ChangeNotifier {
   /// 展开子目录后的目录筛选 ID 集。
   Set<String> expandCategoryIds(String rootId) =>
       classification.subtreeOf(rootId);
+
+  /// 目录路径显示文案（缓存）：列表卡片每行都取，
+  /// 避免逐行 O(深度×目录数) 重复走树；notifyListeners 时失效。
+  String categoryPath(String? id) =>
+      (_categoryPathCache ??= {})[id ?? ''] ??= classification.categoryPath(id);
 
   // ---------- 分类用例 ----------
 

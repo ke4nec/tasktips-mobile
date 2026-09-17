@@ -4,9 +4,23 @@ library;
 /// 无时区本地日历日期 YYYY-MM-DD。
 typedef LocalDate = String;
 
+String _todayCache = '';
+int _todayCacheY = -1, _todayCacheM = -1, _todayCacheD = -1;
+
 String todayLocal() {
   final n = DateTime.now();
-  return '${n.year.toString().padLeft(4, '0')}-'
+  // 当日本地日期缓存：列表逐项 isOverdue/isDueToday 等高频取值时
+  // 避免重复格式化；本地年月日变化（含跨时区导致日期翻转）时重算。
+  if (_todayCache.isNotEmpty &&
+      n.year == _todayCacheY &&
+      n.month == _todayCacheM &&
+      n.day == _todayCacheD) {
+    return _todayCache;
+  }
+  _todayCacheY = n.year;
+  _todayCacheM = n.month;
+  _todayCacheD = n.day;
+  return _todayCache = '${n.year.toString().padLeft(4, '0')}-'
       '${n.month.toString().padLeft(2, '0')}-'
       '${n.day.toString().padLeft(2, '0')}';
 }

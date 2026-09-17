@@ -8,14 +8,26 @@ import '../domain/todo.dart';
 import 'theme.dart';
 
 /// 设计稿 friendlyDate：今天/明天/N 月 N 日/未设置。
+/// “明天”按今日串缓存：列表每行取值时避免重复 DateTime 解析与构造。
+String _tomorrowOf(String today) {
+  if (_fdCacheKey != today) {
+    _fdCacheKey = today;
+    final t = DateTime.tryParse(today);
+    _fdTomorrow = t == null
+        ? null
+        : DateTime(t.year, t.month, t.day + 1).toIso8601String().substring(0, 10);
+  }
+  return _fdTomorrow ?? '';
+}
+
+String? _fdCacheKey;
+String? _fdTomorrow;
+
 String friendlyDate(String today, String? d) {
   if (d == null || d.isEmpty) return '未设置';
   if (d == today) return '今天';
-  final t = DateTime.tryParse(today);
-  if (t != null) {
-    final tomorrow = DateTime(t.year, t.month, t.day + 1);
-    if (d == tomorrow.toIso8601String().substring(0, 10)) return '明天';
-  }
+  final tomorrow = _tomorrowOf(today);
+  if (tomorrow.isNotEmpty && d == tomorrow) return '明天';
   if (d.length >= 10) {
     final m = int.tryParse(d.substring(5, 7));
     final day = int.tryParse(d.substring(8, 10));
@@ -134,8 +146,7 @@ class TodoTile extends StatelessWidget {
                           _tag(a, label: '高优先级', warn: true),
                         if (showCategory && todo.categoryId != null)
                           _tag(a,
-                              label: model.classification
-                                  .categoryPath(todo.categoryId),
+                              label: model.categoryPath(todo.categoryId),
                               purple: true),
                         if (todo.dueDate != null)
                           Row(
@@ -241,6 +252,56 @@ class TodoTile extends StatelessWidget {
 }
 
 final _excerptCache = Expando<String>();
+
+/// 仅在所属 Tab 激活时随 model 变化重建的构建器。
+/// IndexedStack 下四个 Tab 常驻：编辑自动保存/同步落盘等高频通知
+/// 不再触发离场页面全量查询+重建（4 份→1 份）；重新激活时刷新一帧
+/// 取回最新数据，保证切回时视图与 model 一致。
+class ActiveModelBuilder extends StatefulWidget {
+  final AppModel model;
+  final bool active;
+  final Widget Function(BuildContext context) builder;
+  const ActiveModelBuilder({
+    super.key,
+    required this.model,
+    required this.active,
+    required this.builder,
+  });
+
+  @override
+  State<ActiveModelBuilder> createState() => _ActiveModelBuilderState();
+}
+
+class _ActiveModelBuilderState extends State<ActiveModelBuilder> {
+  @override
+  void initState() {
+    super.initState();
+    widget.model.addListener(_onModelChanged);
+  }
+
+  @override
+  void didUpdateWidget(ActiveModelBuilder old) {
+    super.didUpdateWidget(old);
+    if (old.model != widget.model) {
+      old.model.removeListener(_onModelChanged);
+      widget.model.addListener(_onModelChanged);
+    }
+    if (old.active != widget.active && widget.active) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.model.removeListener(_onModelChanged);
+    super.dispose();
+  }
+
+  void _onModelChanged() {
+    if (widget.active && mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context);
+}
 
 class SheetOption<T> {
   final String label;

@@ -10,7 +10,10 @@ import '../widgets.dart';
 /// 分类页：目录/标签分段切换，管理目录树与标签；点分类进入筛选列表。
 class FolderPage extends StatefulWidget {
   final AppModel model;
-  const FolderPage({super.key, required this.model});
+
+  /// 所属 Tab 是否激活：离场时不再随 model 高频通知全量重建。
+  final bool active;
+  const FolderPage({super.key, required this.model, this.active = true});
 
   @override
   State<FolderPage> createState() => _FolderPageState();
@@ -53,9 +56,10 @@ class _FolderPageState extends State<FolderPage> {
           ),
         ),
       ),
-      body: AnimatedBuilder(
-        animation: m,
-        builder: (context, _) => _seg == 0 ? _categoryTree(context) : _tagList(context),
+      body: ActiveModelBuilder(
+        model: m,
+        active: widget.active,
+        builder: (context) => _seg == 0 ? _categoryTree(context) : _tagList(context),
       ),
     );
   }
@@ -690,11 +694,13 @@ class TagTodoList extends StatelessWidget {
 }
 
 /// 色板 hex（#rrggbb）→ Color；非法值回退默认灰。
-Color _parseColor(String hex) {
-  final h = hex.replaceFirst('#', '');
-  if (h.length == 6) {
-    final v = int.tryParse(h, radix: 16);
-    if (v != null) return Color(0xFF000000 | v);
-  }
-  return const Color(0xFF8A8A8A);
-}
+/// 色板值经规范化为有限集合，缓存避免列表每行重复解析。
+final _hexColorCache = <String, Color>{};
+Color _parseColor(String hex) => _hexColorCache.putIfAbsent(hex, () {
+      final h = hex.replaceFirst('#', '');
+      if (h.length == 6) {
+        final v = int.tryParse(h, radix: 16);
+        if (v != null) return Color(0xFF000000 | v);
+      }
+      return const Color(0xFF8A8A8A);
+    });

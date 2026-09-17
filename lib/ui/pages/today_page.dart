@@ -9,13 +9,18 @@ import '../widgets.dart';
 
 class TodayPage extends StatelessWidget {
   final AppModel model;
-  const TodayPage({super.key, required this.model});
+
+  /// 所属 Tab 是否激活：离场时不再随 model 高频通知全量重建
+  ///（IndexedStack 常驻四页，编辑自动保存/同步都会广播）。
+  final bool active;
+  const TodayPage({super.key, required this.model, this.active = true});
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: model,
-      builder: (context, _) {
+    return ActiveModelBuilder(
+      model: model,
+      active: active,
+      builder: (context) {
         final open = model.query(TodoQuery(view: TodoView.today));
         final overdue =
             open.where((t) => t.dueDate!.compareTo(model.today) < 0).toList();
@@ -32,6 +37,58 @@ class TodayPage extends StatelessWidget {
         final a = appColors(context, Theme.of(context).brightness);
         final now = DateTime.now();
         const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+        final header = [
+          Text('${now.month} 月 ${now.day} 日，星期${weekdays[now.weekday - 1]}',
+              style: TextStyle(fontSize: 14, color: a.muted)),
+          const SizedBox(height: 14),
+          _focusCard(context, a, open.length, overdue.length),
+          const SizedBox(height: 12),
+        ];
+        if (open.isEmpty) {
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('今日'),
+              actions: [
+                // 设计稿 L1785：今日页搜索入口 → 跳列表页并聚焦搜索框
+                IconButton(
+                  tooltip: '搜索 Todo',
+                  onPressed: () => openInboxSearch?.call(),
+                  icon: const Icon(Icons.search),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ),
+            body: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                ...header,
+                const EmptyState(
+                  icon: Icons.check_circle_outline,
+                  title: '可以轻松一下了',
+                  subtitle: '去列表看看接下来要做的事。',
+                ),
+                // 空状态也保留即将到期入口（设计稿 L1697 无条件渲染）
+                if (upcomingCount > 0)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        foregroundColor: a.brandInk,
+                      ),
+                      onPressed: () => openSecondaryPage(
+                        context,
+                        _FilteredListView(
+                            model: model, view: TodoView.upcoming),
+                      ),
+                      child: Text('查看即将到期 $upcomingCount'),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        }
+        // Sliver 化：今日项多时只构建可视区，避免整页急构建卡首帧
         return Scaffold(
           appBar: AppBar(
             title: const Text('今日'),
@@ -45,78 +102,48 @@ class TodayPage extends StatelessWidget {
               const SizedBox(width: 8),
             ],
           ),
-          body: open.isEmpty
-              ? ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Text('${now.month} 月 ${now.day} 日，星期${weekdays[now.weekday - 1]}',
-                        style: TextStyle(fontSize: 14, color: a.muted)),
-                    const SizedBox(height: 14),
-                    _focusCard(context, a, 0, 0),
-                    const SizedBox(height: 12),
-                    const EmptyState(
-                      icon: Icons.check_circle_outline,
-                      title: '可以轻松一下了',
-                      subtitle: '去列表看看接下来要做的事。',
-                    ),
-                    // 空状态也保留即将到期入口（设计稿 L1697 无条件渲染）
-                    if (upcomingCount > 0)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            minimumSize: const Size(48, 48),
-                            foregroundColor: a.brandInk,
-                          ),
-                          onPressed: () => openSecondaryPage(
-                            context,
-                            _FilteredListView(
-                                model: model, view: TodoView.upcoming),
-                          ),
-                          child: Text('查看即将到期 $upcomingCount'),
-                        ),
+          body: CustomScrollView(
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.all(16),
+                sliver: SliverList.list(children: header),
+              ),
+              if (overdue.isNotEmpty)
+                ..._section(context, '已过期', overdue,
+                    count: overdue.length, color: a.danger),
+              if (dueToday.isNotEmpty)
+                ..._section(context, '今天到期', dueToday,
+                    count: dueToday.length),
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                sliver: SliverToBoxAdapter(
+                  // 设计稿：底部 text-button 入口（48dp 触控）
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(48, 48),
+                        foregroundColor: a.brandInk,
                       ),
-                  ],
-                )
-              : ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    Text('${now.month} 月 ${now.day} 日，星期${weekdays[now.weekday - 1]}',
-                        style: TextStyle(fontSize: 14, color: a.muted)),
-                    const SizedBox(height: 14),
-                    _focusCard(context, a, open.length, overdue.length),
-                    const SizedBox(height: 12),
-                    if (overdue.isNotEmpty)
-                      _section(context, '已过期', overdue, count: overdue.length,
-                          color: a.danger),
-                    if (dueToday.isNotEmpty)
-                      _section(context, '今天到期', dueToday,
-                          count: dueToday.length),
-                    const SizedBox(height: 4),
-                    // 设计稿：底部 text-button 入口（48dp 触控）
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton(
-                        style: TextButton.styleFrom(
-                          minimumSize: const Size(48, 48),
-                          foregroundColor: a.brandInk,
-                        ),
-                        onPressed: () => openSecondaryPage(
-                          context,
-                          _FilteredListView(model: model, view: TodoView.upcoming),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('查看即将到期 $upcomingCount'),
-                            const SizedBox(width: 6),
-                            const Icon(Icons.chevron_right, size: 18),
-                          ],
-                        ),
+                      onPressed: () => openSecondaryPage(
+                        context,
+                        _FilteredListView(
+                            model: model, view: TodoView.upcoming),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('查看即将到期 $upcomingCount'),
+                          const SizedBox(width: 6),
+                          const Icon(Icons.chevron_right, size: 18),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -168,38 +195,46 @@ class TodayPage extends StatelessWidget {
     );
   }
 
-  Widget _section(BuildContext context, String title, List<Todo> items,
+  /// 分组段（Sliver 对）：标题行 48dp + 计数，条目 SliverList.builder 惰性构建。
+  List<Widget> _section(BuildContext context, String title, List<Todo> items,
       {int? count, Color? color}) {
     final a = appColors(context, Theme.of(context).brightness);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // 设计稿 .section-head：48dp 高 + 计数
-        Container(
-          constraints: const BoxConstraints(minHeight: 48),
-          alignment: Alignment.centerLeft,
-          child: Row(
-            children: [
-              Text(title,
-                  style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: color ?? a.muted)),
-              if (count != null) ...[
-                const SizedBox(width: 8),
-                Text('$count',
-                    style: TextStyle(fontSize: 12, color: a.muted)),
+    return [
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        sliver: SliverList.list(children: [
+          Container(
+            constraints: const BoxConstraints(minHeight: 48),
+            alignment: Alignment.centerLeft,
+            child: Row(
+              children: [
+                Text(title,
+                    style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                        color: color ?? a.muted)),
+                if (count != null) ...[
+                  const SizedBox(width: 8),
+                  Text('$count',
+                      style: TextStyle(fontSize: 12, color: a.muted)),
+                ],
               ],
-            ],
+            ),
+          ),
+        ]),
+      ),
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        sliver: SliverList.builder(
+          itemCount: items.length,
+          itemBuilder: (context, i) => TodoTile(
+            model: model,
+            todo: items[i],
+            onOpen: () => openDetailPage(context, model, items[i].id),
           ),
         ),
-        ...items.map((t) => TodoTile(
-              model: model,
-              todo: t,
-              onOpen: () => openDetailPage(context, model, t.id),
-            )),
-      ],
-    );
+      ),
+    ];
   }
 }
 

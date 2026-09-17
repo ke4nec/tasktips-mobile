@@ -132,21 +132,35 @@ class TodoStore {
   // ---------- todos ----------
 
   /// 全量扫描 tips/*.md。单条损坏不阻断，返回只读条目信息。
+  /// 文件按批并行读取（闪存上多文件串行 await 是启动扫描的主要耗时），
+  /// 结果保持目录列举顺序；批大小限制并发文件数，避免瞬时内存峰值。
   Future<ScanResult> scanTodos() async {
-    final todos = <Todo>[];
-    final corrupt = <CorruptTip>[];
+    final files = <File>[];
     await for (final e in tipsDir.list()) {
-      if (e is! File || !e.path.endsWith('.md')) continue;
-      final name = p.basename(e.path);
-      try {
-        final parsed = parseTodoDoc(await e.readAsString());
-        todos.add(todoFromFields(parsed.fields, parsed.body));
-      } catch (err) {
-        await _keepRecoveryCopy(name, e);
-        corrupt.add(CorruptTip(name, err.toString()));
-      }
+      if (e is File && e.path.endsWith('.md')) files.add(e);
     }
-    return ScanResult(todos, corrupt);
+    final todos = List<Todo?>.filled(files.length, null);
+    final corrupt = <CorruptTip>[];
+    const batch = 16;
+    for (var start = 0; start < files.length; start += batch) {
+      final end = min(start + batch, files.length);
+      await Future.wait([
+        for (var i = start; i < end; i++)
+          () async {
+            final e = files[i];
+            final name = p.basename(e.path);
+            try {
+              final parsed = parseTodoDoc(await e.readAsString());
+              todos[i] = todoFromFields(parsed.fields, parsed.body);
+            } catch (err) {
+              await _keepRecoveryCopy(name, e);
+              corrupt.add(CorruptTip(name, err.toString()));
+            }
+          }(),
+      ]);
+    }
+    return ScanResult(
+        [for (final t in todos) ?t], corrupt);
   }
 
   Future<void> _keepRecoveryCopy(String fileName, File src) async {

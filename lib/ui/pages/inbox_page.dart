@@ -12,7 +12,10 @@ import '../widgets.dart';
 /// Todo 列表页：搜索、视图切换（全部/即将到期/已完成）与底部筛选排序面板。
 class InboxPage extends StatefulWidget {
   final AppModel model;
-  const InboxPage({super.key, required this.model});
+
+  /// 所属 Tab 是否激活：离场时不再随 model 高频通知全量重建。
+  final bool active;
+  const InboxPage({super.key, required this.model, this.active = true});
 
   @override
   State<InboxPage> createState() => _InboxPageState();
@@ -116,9 +119,10 @@ class _InboxPageState extends State<InboxPage>
           ),
         ),
       ),
-      body: AnimatedBuilder(
-        animation: widget.model,
-        builder: (context, _) {
+      body: ActiveModelBuilder(
+        model: widget.model,
+        active: widget.active,
+        builder: (context) {
           final list = widget.model.query(_q);
           if (list.isEmpty) {
             return _q.hasActiveFilter
@@ -165,6 +169,10 @@ class _InboxPageState extends State<InboxPage>
                         // onReorderItem 已按移除语义调整 newIndex，无需手动 -1
                         onReorderItem: (oldI, newI) =>
                             _onReorder(list, oldI, newI),
+                        // 轻量拖拽替身：低阴影 + 卡片同款圆角，替代默认
+                        // elevation 6 阴影动画——长列表拖拽时每帧重绘阴影
+                        // 是掉帧主因之一
+                        proxyDecorator: _dragProxy,
                         itemBuilder: (context, i) => TodoTile(
                           key: ValueKey(list[i].id),
                           model: widget.model,
@@ -191,6 +199,21 @@ class _InboxPageState extends State<InboxPage>
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// 拖拽替身：Material elevation 3（默认 6 的阴影每帧重绘明显更贵），
+  /// 圆角与 TodoTile 卡片一致，避免拖起时露出直角。
+  Widget _dragProxy(Widget child, int index, Animation<double> animation) {
+    return AnimatedBuilder(
+      animation: animation,
+      builder: (context, _) => Material(
+        elevation: Curves.easeOut.transform(animation.value) * 3,
+        color: Colors.transparent,
+        shadowColor: Colors.black,
+        borderRadius: BorderRadius.circular(16),
+        child: child,
       ),
     );
   }

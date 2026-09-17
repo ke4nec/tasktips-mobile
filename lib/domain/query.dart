@@ -92,6 +92,14 @@ String _stripToPlainText(String md) {
   return buf.join(' ');
 }
 
+/// 搜索用纯文本缓存（小写）：按 Todo 对象身份 Expando 缓存。
+/// 所有写入路径（writeTodo/_writeTodosBulk/同步落盘）都替换对象实例，
+/// 旧缓存随对象一起丢弃，无需手动失效。
+final _searchTextCache = Expando<String>();
+
+String _searchableText(Todo t) =>
+    _searchTextCache[t] ??= _stripToPlainText(t.body).toLowerCase();
+
 /// 过滤 + 排序。today 由调用方传入以便测试跨日场景。
 /// [activeCategoryIds] 为当前未删除目录 ID 集：categoryId 指向不存在或
 /// 已删除目录的 Todo 按"未分类"口径参与筛选与计数。
@@ -113,7 +121,7 @@ List<Todo> runQuery(
   if (search != null && search.isNotEmpty) {
     it = it.where((t) =>
         t.title.toLowerCase().contains(search) ||
-        _stripToPlainText(t.body).toLowerCase().contains(search) ||
+        _searchableText(t).contains(search) ||
         t.tags.any((tag) => tag.toLowerCase().contains(search)));
   }
   if (q.tagNames != null && q.tagNames!.isNotEmpty) {

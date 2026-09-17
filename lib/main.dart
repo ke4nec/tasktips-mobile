@@ -80,27 +80,43 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
       if (sync.state.autoSync) {
         Future.microtask(() => sync.syncNow());
       }
-      // 分享处理：引导未完成时挂起，完成后补建
-      var handlerReady = model.onboardingDone;
-      if (handlerReady) {
-        _share.setHandler((text) => _createFromShare(model, text));
-      } else {
-        model.addListener(() {
-          if (model.onboardingDone && !handlerReady) {
-            handlerReady = true;
-            _share.setHandler((text) => _createFromShare(model, text));
-          }
-        });
-      }
-      // 自动同步开启时注册 WorkManager 15 分钟周期任务（系统调度）
+      // 非关键路径（WorkManager 注册、分享种子读取）延后到首帧之后：
+      // 不阻塞 FutureBuilder 呈现主界面，缩短冷启动可见时间
+      unawaited(_deferredBootstrap(model));
+      return model;
+    }();
+    _share.start();
+    _startAutoSyncTimer();
+  }
+
+  /// 首帧后再执行的启动收尾：分享处理接入、WorkManager 周期任务注册、
+  /// 冷启动分享种子。全部失败可容忍（下次启动重试），不拖慢首帧；
+  /// 各段独立捕获，WorkManager 异常不吞掉冷启动分享。
+  Future<void> _deferredBootstrap(AppModel model) async {
+    // 分享处理：引导未完成时挂起，完成后补建
+    var handlerReady = model.onboardingDone;
+    if (handlerReady) {
+      _share.setHandler((text) => _createFromShare(model, text));
+    } else {
+      model.addListener(() {
+        if (model.onboardingDone && !handlerReady) {
+          handlerReady = true;
+          _share.setHandler((text) => _createFromShare(model, text));
+        }
+      });
+    }
+    // 自动同步开启时注册 WorkManager 15 分钟周期任务（系统调度）
+    try {
       await Workmanager().initialize(callbackDispatcher);
-      if (sync.state.autoSync) {
+      if (_sync?.state.autoSync == true) {
         await Workmanager().registerPeriodicTask(
           'tasktips-sync', 'tasktipsPeriodicSync',
           frequency: const Duration(minutes: 15),
           existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
         );
       }
+    } catch (_) {}
+    try {
       final initial = await _share.initialSharedText();
       if (initial != null) {
         if (model.onboardingDone) {
@@ -110,10 +126,7 @@ class _BootState extends State<Boot> with WidgetsBindingObserver {
           _share.queuePending(initial);
         }
       }
-      return model;
-    }();
-    _share.start();
-    _startAutoSyncTimer();
+    } catch (_) {}
   }
 
   /// 前台每 60 秒检查；后台暂停（Timer 不感知生命周期，避免后台空转请求）。

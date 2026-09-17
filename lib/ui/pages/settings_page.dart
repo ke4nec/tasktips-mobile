@@ -8,13 +8,16 @@ import '../../app/app_model.dart';
 import '../../infra/backup.dart';
 import '../app.dart';
 import '../theme.dart';
-import '../widgets.dart' show confirmDialog;
+import '../widgets.dart' show ActiveModelBuilder, confirmDialog;
 
 /// 设置页（设计稿 settingsPage）：外观 / 数据 / 关于 三组 setting-row，
 /// 行内 trailing 显示当前值，主题用底部面板三选。
 class SettingsPage extends StatelessWidget {
   final AppModel model;
-  const SettingsPage({super.key, required this.model});
+
+  /// 所属 Tab 是否激活：离场时不再随 model 高频通知全量重建。
+  final bool active;
+  const SettingsPage({super.key, required this.model, this.active = true});
 
   // 与 pubspec.yaml versionName 保持一致
   static const appVersion = '0.0.2';
@@ -22,9 +25,10 @@ class SettingsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final a = appColors(context, Theme.of(context).brightness);
-    return AnimatedBuilder(
-      animation: model,
-      builder: (context, _) => Scaffold(
+    return ActiveModelBuilder(
+      model: model,
+      active: active,
+      builder: (context) => Scaffold(
         appBar: AppBar(title: const Text('设置')),
         body: ListView(
           children: [

@@ -141,10 +141,10 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
       inboxSearchFocusTick.value++;
     };
     final pages = [
-      TodayPage(model: model),
-      InboxPage(model: model),
-      FolderPage(model: model),
-      SettingsPage(model: model),
+      TodayPage(model: model, active: _tab == 0),
+      InboxPage(model: model, active: _tab == 1),
+      FolderPage(model: model, active: _tab == 2),
+      SettingsPage(model: model, active: _tab == 3),
     ];
     final showFab = _tab <= 2;
     return Scaffold(
