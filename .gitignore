@@ -44,5 +44,10 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+# Android 正式签名（私钥口令，禁止入库）
+/android/keystore.properties
+/android/*.keystore
+/android/*.jks
+
 # Widget Preview related
 .widget_preview/

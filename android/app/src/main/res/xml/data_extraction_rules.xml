@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- state/ 与 refresh token（FlutterSecureStorage）排除云备份与设备迁移：
+     新安装重新登录、生成新设备身份，不复用旧凭据（设计 §4.4）。 -->
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="state" />
+        <exclude domain="sharedpref" path="FlutterSecureStorage" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="state" />
+        <exclude domain="sharedpref" path="FlutterSecureStorage" />
     </device-transfer>
 </data-extraction-rules>

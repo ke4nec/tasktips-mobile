@@ -1,4 +1,4 @@
-/// 主题令牌来自设计稿 android-mobile-ui.html 的 :root 块（v0.2）。
+/// 主题令牌来自设计稿 android-mobile-ui.html 的 :root 块（v0.3）。
 library;
 
 import 'package:flutter/material.dart';

@@ -56,6 +56,11 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # 同步引擎 mock 回归测试：用 codegen 配套的序列化器构造 canned 响应
+  built_value: ^8.13.0
+  built_collection: ^5.1.1
+  one_of: ^1.5.0
+
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
   # activated in the `analysis_options.yaml` file located at the root of your

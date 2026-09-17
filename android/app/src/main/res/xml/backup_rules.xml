@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- state/ 含设备身份、同步基线与凭据引用，排除系统云备份与设备迁移；
-     正文是否参与云备份属待确认事项（设计文档 §6），当前保守保留 content/ 备份。 -->
+     正文是否参与云备份属待确认事项（设计文档 §6），当前保守保留 content/ 备份。
+     FlutterSecureStorage 含 refresh token（安全存储）：排除备份，新安装必须
+     重新登录、生成新设备身份，不得复用旧凭据（设计 §4.4）。 -->
 <full-backup-content>
     <exclude domain="file" path="state" />
+    <exclude domain="sharedpref" path="FlutterSecureStorage" />
 </full-backup-content>

@@ -26,7 +26,7 @@ packages:
     source: hosted
     version: "2.1.2"
   built_collection:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: built_collection
       sha256: "376e3dd27b51ea877c28d525560790aee2e6fbb5f20e2f85d5081027d94e2100"
@@ -34,7 +34,7 @@ packages:
     source: hosted
     version: "5.1.1"
   built_value:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: built_value
       sha256: f87ea98192116f7093cb214551ce1929caae0681fdba282b3d8b4462adee7bb7
@@ -497,7 +497,7 @@ packages:
     source: hosted
     version: "9.5.0"
   one_of:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: one_of
       sha256: "25fe0fcf181e761c6fcd604caf9d5fdf952321be17584ba81c72c06bdaa511f0"
