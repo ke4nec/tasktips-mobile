@@ -72,7 +72,7 @@ void main() {
     final t = await model.createTodo();
     await model.trashTodo(t.id);
     await model.purgeTodo(t.id);
-    final idx = await store.loadIndex();
+    final idx = (await store.loadIndex()).$1;
     expect(idx.tombstones.any((ts) => ts.id == t.id), isTrue);
     expect(await store.readTodo(t.id), isNull);
   });
@@ -87,7 +87,7 @@ void main() {
     await store.saveTodo(trashed);
     await model.purgeExpiredTrash();
     expect(model.byId(t.id), isNull);
-    final idx = await store.loadIndex();
+    final idx = (await store.loadIndex()).$1;
     expect(idx.tombstones.any((ts) => ts.id == t.id), isTrue);
   });
 

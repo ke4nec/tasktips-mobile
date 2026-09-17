@@ -54,7 +54,7 @@ class _SyncPageState extends State<SyncPage> {
         if (sync.state.serverUrl != null)
           IconButton(
             tooltip: '立即同步',
-            onPressed: sync.busy ? null : () => sync.syncNow(),
+            onPressed: sync.busy ? null : () => sync.syncNow(manual: true),
             icon: const Icon(Icons.sync),
           ),
       ],
@@ -420,7 +420,7 @@ class _SyncPageState extends State<SyncPage> {
           Row(children: [
             Expanded(
               child: FilledButton.icon(
-                onPressed: sync.busy ? null : () => sync.syncNow(),
+                onPressed: sync.busy ? null : () => sync.syncNow(manual: true),
                 icon: const Icon(Icons.sync),
                 label: const Text('立即同步'),
               ),
@@ -498,14 +498,16 @@ class _SyncPageState extends State<SyncPage> {
                 dense: true,
                 title: Text(
                     '${_kindLabel(c.kind)} ${c.id.substring(0, c.id.length.clamp(0, 10))}'),
-                subtitle: Text('本机 r${c.localRevision} / 远端 r${c.remoteRevision}'),
+                subtitle: Text(c.remoteDeleted
+                    ? '远端版本为删除（本机 r${c.localRevision}）'
+                    : '本机 r${c.localRevision} / 远端 r${c.remoteRevision}'),
                 trailing: Wrap(spacing: 4, children: [
                   TextButton(
                       onPressed: () => sync.resolveKeepLocal(c.kind, c.id),
                       child: const Text('保留本机')),
                   TextButton(
                       onPressed: () => sync.resolveUseRemote(c.kind, c.id),
-                      child: const Text('采用远端')),
+                      child: Text(c.remoteDeleted ? '接受删除' : '采用远端')),
                 ]),
               ),
           ],

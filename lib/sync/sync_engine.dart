@@ -39,6 +39,24 @@ class SyncEngine extends ChangeNotifier {
   List<api.Device> devices = [];
   bool busy = false;
 
+  /// 连接代次：logout/更换项目时 +1；在飞异步流发现代次变化即放弃写入，
+  /// 保证旧连接的迟到响应不会写入新连接状态。
+  int _epoch = 0;
+
+  /// 自动同步退避：连续失败后指数等待，手动同步不受限。
+  int _consecutiveFailures = 0;
+  DateTime? _lastFailureAt;
+  bool get _backoffActive {
+    final last = _lastFailureAt;
+    if (last == null || _consecutiveFailures == 0) return false;
+    final idx = (_consecutiveFailures - 1).clamp(0, 3);
+    final wait = Duration(seconds: const [30, 60, 120, 300][idx]);
+    return DateTime.now().isBefore(last.add(wait));
+  }
+
+  /// sync-state.json 解析失败：墓碑/基线状态不明，自动推送暂停。
+  bool stateLoadFailed = false;
+
   SyncEngine(this.model, this.session) {
     dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 15),
@@ -95,8 +113,11 @@ class SyncEngine extends ChangeNotifier {
     if (await _stateFile.exists()) {
       try {
         state = SyncStateStore('').load(await _stateFile.readAsString());
+        stateLoadFailed = false;
       } catch (_) {
+        // 基线/墓碑状态不明：不静默重置为空继续推，先暂停自动推送
         state = SyncStateData();
+        stateLoadFailed = true;
       }
     }
     await session.loadRefreshToken();
@@ -186,7 +207,10 @@ class SyncEngine extends ChangeNotifier {
 
   Future<void> selectProject(String projectId) async {
     if (state.projectId != null && state.projectId != projectId) {
-      // 更换项目：隔离同步基线，不自动迁移本地内容
+      // 更换项目：隔离同步基线，不自动迁移本地内容；
+      // 递增连接代次使旧项目在飞的同步流全部失效
+      _epoch++;
+      busy = false;
       final server = state.serverUrl;
       final account = state.accountId;
       final email = state.email;
@@ -201,17 +225,22 @@ class SyncEngine extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // 先失效在飞流，再等待可能的服务端登出，避免旧响应写入新状态
+    _epoch++;
+    busy = false;
+    final ep = _epoch;
     try {
       if (session.refreshToken != null) {
         await _auth.logout();
       }
     } catch (_) {}
     await session.clear();
+    if (_epoch != ep) return;
     state = SyncStateData();
     devices = [];
-    await _persist();
     status = SyncStatus.disconnected;
-    _log('login', 0, 'logout');
+    state.addLog(SyncLogEntry(DateTime.now(), 'login', 0, 'logout'));
+    await _persist();
     notifyListeners();
   }
 
@@ -344,9 +373,8 @@ class SyncEngine extends ChangeNotifier {
   /// 完整 bootstrap：分页读取；最终 cursor 在快照完整落盘后启用。
   Future<void> bootstrapAndApply() async {
     _requireProject();
-    busy = true;
-    status = SyncStatus.syncing;
-    notifyListeners();
+    final firstBootstrap = !state.bootstrapped;
+    final ep = _epoch;
     try {
       var pageToken = '';
       while (true) {
@@ -361,30 +389,31 @@ class SyncEngine extends ChangeNotifier {
           await _applyChange(item, prefetched: prefetched, notify: false);
         }
         model.notifyListeners(); // 整页应用完合并通知一次
-        // 该页对象可靠保存后才推进状态
-        state.generation = r.generation;
-        state.bootstrapped = true;
+        // bootstrap 中途不落盘 bootstrapped/cursor：快照不完整时重启会
+        // 重新走 bootstrap，避免基于残缺基线推送
         if (!r.hasMore) {
+          state.generation = r.generation;
+          state.bootstrapped = true;
           state.pullCursor = r.cursor;
           break;
         }
         pageToken = r.nextPageToken!;
-        await _persist();
       }
+      // 首次接入确认完成后默认开启自动同步（设计 §4.4）
+      if (firstBootstrap && !state.autoSync) state.autoSync = true;
       _log('bootstrap', 1, 'ok');
-      status = SyncStatus.synced;
       await _persist();
+      if (firstBootstrap && state.autoSync) {
+        notifyListeners(); // 让 UI 反映 autoSync 变化
+      }
     } on DioException catch (e) {
+      if (_epoch != ep) return;
       _log('bootstrap', 1, 'error', 'HTTP_${e.response?.statusCode ?? 'network'}');
-      status = SyncStatus.error;
-      lastError = _dioMessage(e, '同步失败');
+      rethrow;
     } catch (e) {
+      if (_epoch != ep) return;
       _log('bootstrap', 1, 'error', 'LOCAL');
-      status = SyncStatus.error;
-      lastError = e.toString();
-    } finally {
-      busy = false;
-      notifyListeners();
+      rethrow;
     }
   }
 
@@ -397,19 +426,39 @@ class SyncEngine extends ChangeNotifier {
     final id = m['id'] as String;
     final key = state.baselineKey(kind, id);
     if (m['type'] == 'tombstone') {
+      final revision = (m['revision'] as num).toInt();
       if (kind == 'todo') {
-        final f = File('${model.store.tipsDir.path}/$id.md');
-        if (await f.exists()) await f.delete();
-        model.todos.removeWhere((t) => t.id == id);
+        final base = state.baselines[key];
+        final t = model.byId(id);
+        final localDirty =
+            t != null && (base == null || base.revision < t.revision);
+        if (localDirty) {
+          // 删除 vs 本机未同步编辑：保留本机并记录冲突（远端版本为删除），
+          // 不静默丢弃
+          state.conflicts.add(ConflictRecord(
+              kind, id, t.revision, revision, null,
+              remoteDeleted: true));
+        } else {
+          final f = File('${model.store.tipsDir.path}/$id.md');
+          if (await f.exists()) await f.delete();
+          model.todos.removeWhere((t) => t.id == id);
+        }
       } else if (kind == 'image') {
         final ext = _imageExtFor(id);
         if (ext != null) {
-          final f = File('${model.store.imagesDir.path}/$id${id.contains('.') ? '' : '.$ext'}');
-          if (await f.exists()) await f.delete();
+          final f = File(
+              '${model.store.imagesDir.path}/$id${id.contains('.') ? '' : '.$ext'}');
+          if (await f.exists() && state.baselines[key] == null) {
+            // 本机未同步的图片：保留并记录冲突（远端版本为删除）
+            state.conflicts.add(ConflictRecord(
+                kind, id, 1, revision, null,
+                remoteDeleted: true));
+          } else if (await f.exists()) {
+            await f.delete();
+          }
         }
       }
-      state.baselines[key] =
-          ObjectBaseline(kind, id, (m['revision'] as num).toInt(), null);
+      state.baselines[key] = ObjectBaseline(kind, id, revision, null);
       if (notify) model.notifyListeners();
       return;
     }
@@ -497,11 +546,13 @@ class SyncEngine extends ChangeNotifier {
         model.classification = c;
         await model.store.saveClassification(c);
         model.classificationVersion++;
+        model.classificationCorrupt = false; // 远端权威副本已修复本地损坏
       case 'index':
         final idx = model.store.indexFromRawJson(text);
         model.index = idx;
         await model.store.saveIndex(idx);
         model.indexVersion++;
+        model.indexCorrupt = false;
       default:
         break;
     }
@@ -539,6 +590,14 @@ class SyncEngine extends ChangeNotifier {
                 b.limit = 500;
               })))
           .data!;
+      // generation 回退/变化（服务端恢复、快照重建）：本机基线不再可信，
+      // 中止并重新 bootstrap，不按旧 cursor 继续
+      if (state.generation != null && resp.generation != state.generation) {
+        state.bootstrapped = false;
+        state.pullCursor = null;
+        await _persist();
+        throw SyncException('GENERATION_MISMATCH', '项目已变更，需要重新同步');
+      }
       var applied = 0;
       final prefetched = await _prefetchPayloads(resp.changes);
       for (final change in resp.changes) {
@@ -559,8 +618,20 @@ class SyncEngine extends ChangeNotifier {
 
   // ---------- push ----------
 
+  /// 各对象 payload 限额（完整序列化字节，禁止截断后上传）。
+  static const _payloadLimits = {
+    'todo': 8 * 1024 * 1024,
+    'classification': 5 * 1024 * 1024,
+    'index': 5 * 1024 * 1024,
+    'image': 10 * 1024 * 1024,
+  };
+
   Future<void> pushDirty() async {
     _requireProject();
+    // 墓碑/基线状态不明（sync-state 损坏）或 index 损坏：暂停自动推送
+    if (stateLoadFailed || model.indexCorrupt) {
+      throw SyncException('STATE_UNAVAILABLE', '本机同步状态/索引数据损坏，已暂停自动推送，请先核对数据');
+    }
     // 未完成请求原样重试（幂等），不把新编辑内容套入旧请求 ID
     if (state.pendingPush != null) {
       await _submitPush(state.pendingPush!);
@@ -569,13 +640,23 @@ class SyncEngine extends ChangeNotifier {
     final objects = <Map<String, Object?>>[];
     final tombstones = <Map<String, Object?>>[];
 
+    // 分类/索引文件损坏时禁止推送（避免空对象反向覆盖远端）
+    final skipClassFiles = model.classificationCorrupt;
+
     for (final t in model.todos) {
       final key = state.baselineKey('todo', t.id);
       final base = state.baselines[key];
+      // 被拒绝对象：本地版本未变化前不再重试（校验失败停止重试该对象）
+      final rej = state.rejected[key];
+      if (rej != null && rej.revision >= t.revision) continue;
       if (base == null || base.revision < t.revision) {
         final bytes = todoBytes(t);
         final hash = sha256Of(bytes);
         if (base?.contentHash == hash) continue; // 内容未变，无需重传
+        if (bytes.length > _payloadLimits['todo']!) {
+          _recordRejected(key, 'PAYLOAD_TOO_LARGE', t.revision, hash);
+          continue; // 单项超限保留本地并记录原因，不阻断其他对象
+        }
         await _ensurePayloadUploaded(hash, bytes);
         objects.add({
           'kind': 'todo',
@@ -590,29 +671,68 @@ class SyncEngine extends ChangeNotifier {
       }
     }
 
-    for (final kind in ['classification', 'index']) {
-      final base = state.baselines[state.baselineKey(kind, kind)];
-      // 未变更时直接跳过，不再序列化全文计算哈希
-      final hash =
-          kind == 'classification' ? classificationHash() : indexHash();
-      if (base?.contentHash == hash) continue;
-      final bytes =
-          kind == 'classification' ? classificationBytes() : indexBytes();
-      await _ensurePayloadUploaded(hash, bytes);
-      objects.add({
-        'kind': kind,
-        'id': kind,
-        'schemaVersion': 1,
-        'revision': (base?.revision ?? 0) + 1,
-        'baseRevision': base?.revision,
-        'contentHash': hash,
-        'updatedAt': DateTime.now().toUtc().toIso8601String(),
-        'deviceId': model.deviceId,
-      });
+    // 本地图片：文件名即对象 id（images/<ulid>.<ext>），新文件全量上传
+    try {
+      for (final e in model.store.imagesDir.listSync()) {
+        final name = e.uri.pathSegments.last;
+        if (e is! File || _imageExtFor(name) == null) continue;
+        final key = state.baselineKey('image', name);
+        if (state.baselines[key] != null || state.rejected.containsKey(key)) {
+          continue;
+        }
+        final bytes = await e.readAsBytes();
+        if (bytes.length > _payloadLimits['image']!) {
+          _recordRejected(key, 'PAYLOAD_TOO_LARGE', 1, sha256Of(bytes));
+          continue;
+        }
+        final hash = sha256Of(bytes);
+        await _ensurePayloadUploaded(hash, bytes);
+        objects.add({
+          'kind': 'image',
+          'id': name,
+          'schemaVersion': 1,
+          'revision': 1,
+          'baseRevision': null,
+          'contentHash': hash,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'deviceId': model.deviceId,
+        });
+      }
+    } catch (_) {}
+
+    if (!skipClassFiles) {
+      for (final kind in ['classification', 'index']) {
+        final key = state.baselineKey(kind, kind);
+        final base = state.baselines[key];
+        // 未变更时直接跳过，不再序列化全文计算哈希
+        final hash =
+            kind == 'classification' ? classificationHash() : indexHash();
+        if (base?.contentHash == hash) continue;
+        final rej = state.rejected[key];
+        if (rej != null && rej.contentHash == hash) continue; // 同内容曾被拒
+        final bytes =
+            kind == 'classification' ? classificationBytes() : indexBytes();
+        if (bytes.length > _payloadLimits[kind]!) {
+          _recordRejected(key, 'PAYLOAD_TOO_LARGE', -1, hash);
+          continue;
+        }
+        await _ensurePayloadUploaded(hash, bytes);
+        objects.add({
+          'kind': kind,
+          'id': kind,
+          'schemaVersion': 1,
+          'revision': (base?.revision ?? 0) + 1,
+          'baseRevision': base?.revision,
+          'contentHash': hash,
+          'updatedAt': DateTime.now().toUtc().toIso8601String(),
+          'deviceId': model.deviceId,
+        });
+      }
     }
 
     for (final ts in model.index.tombstones) {
-      final base = state.baselines[state.baselineKey(ts.kind, ts.id)];
+      final key = state.baselineKey(ts.kind, ts.id);
+      final base = state.baselines[key];
       if (base == null || base.revision < ts.revision) {
         tombstones.add({
           'kind': ts.kind,
@@ -626,18 +746,30 @@ class SyncEngine extends ChangeNotifier {
     }
 
     if (objects.isEmpty && tombstones.isEmpty) return;
-    final pending = PendingPush(
-        _newRequestId(), state.generation ?? 1, objects, tombstones);
-    state.pendingPush = pending;
-    await _persist();
-    await _submitPush(pending);
+    // OpenAPI pushSyncChanges maxItems=100：分批提交，每批独立 requestId，
+    // 前一批成功后才提交下一批；失败时剩余内容留待下轮
+    final items = [...objects, ...tombstones];
+    for (var i = 0; i < items.length; i += 100) {
+      final batch = items.skip(i).take(100).toList();
+      final batchObjects =
+          batch.where((e) => e.containsKey('contentHash')).toList();
+      final batchTombstones =
+          batch.where((e) => !e.containsKey('contentHash')).toList();
+      final pending = PendingPush(
+          _newRequestId(), state.generation ?? 1, batchObjects, batchTombstones);
+      state.pendingPush = pending;
+      await _persist();
+      await _submitPush(pending);
+      if (state.pendingPush != null) return; // 本批失败，等待下次
+    }
+  }
+
+  void _recordRejected(String key, String code, int revision, String? hash) {
+    state.rejected[key] = RejectedRecord(code, revision, hash);
+    _log('upload', 1, 'rejected', code);
   }
 
   Future<void> _ensurePayloadUploaded(String hash, Uint8List bytes) async {
-    // 对象限额：payload ≤ 10MiB，禁止截断后上传
-    if (bytes.length > 10 * 1024 * 1024) {
-      throw SyncException('PAYLOAD_TOO_LARGE', '对象超过 10 MiB 限制');
-    }
     try {
       await _payloadsApi.headPayload(
           projectId: state.projectId!, contentHash: hash);
@@ -660,6 +792,7 @@ class SyncEngine extends ChangeNotifier {
   api.ObjectKind _kind(String name) => api.ObjectKind.valueOf(name);
 
   Future<void> _submitPush(PendingPush pending) async {
+    final ep = _epoch;
     try {
       final r = await _syncApi.pushSyncChanges(
           projectId: state.projectId!,
@@ -689,6 +822,7 @@ class SyncEngine extends ChangeNotifier {
               }));
             }
           }));
+      if (_epoch != ep) return; // 连接已更换：丢弃旧响应
       final resp = r.data!;
       var applied = 0;
       for (final res in resp.results) {
@@ -698,12 +832,13 @@ class SyncEngine extends ChangeNotifier {
           kind = oneOf.kind.name;
           id = oneOf.id;
           applied++;
+          final key = state.baselineKey(kind, id);
           final hash = pending.objects
               .where((o) => o['id'] == id && o['kind'] == kind)
               .map((o) => o['contentHash'] as String)
               .firstOrNull;
-          state.baselines[state.baselineKey(kind, id)] =
-              ObjectBaseline(kind, id, oneOf.revision, hash);
+          state.baselines[key] = ObjectBaseline(kind, id, oneOf.revision, hash);
+          state.rejected.remove(key); // 成功后清除历史拒绝记录
         } else if (oneOf is api.PushConflictResult) {
           kind = oneOf.kind.name;
           id = oneOf.id;
@@ -711,22 +846,37 @@ class SyncEngine extends ChangeNotifier {
               kind, id, oneOf.expectedRevision ?? 0, oneOf.actualRevision ?? 0, null));
         } else {
           final rej = oneOf as api.PushRejectedResult;
+          final key = state.baselineKey(rej.kind.name, rej.id);
+          final revision = pending.objects
+              .where((o) => o['id'] == rej.id && o['kind'] == rej.kind.name)
+              .map((o) => (o['revision'] as num).toInt())
+              .firstOrNull;
+          // 记录被拒对象：本地未变化前不再重试（校验失败停止重试该对象）
+          state.rejected[key] =
+              RejectedRecord(rej.code.name, revision ?? -1, null);
           _log('upload', 1, 'rejected', rej.code.name);
-          continue;
         }
       }
-      // 逐项处理：只更新成功对象基线；全部条目处理完毕才清空请求
-      if (resp.results.length ==
-          pending.objects.length + pending.tombstones.length) {
-        state.pendingPush = null;
-      }
+      // 服务端对每个条目都给出结果：请求已完成（含被拒条目），
+      // 清除待提交；被拒对象由 rejected 记录承接，不再以新请求重试
+      state.pendingPush = null;
       _log('upload', applied,
           state.conflicts.any((c) => !c.resolved) ? 'conflict' : 'ok');
       await _persist();
     } on DioException catch (e) {
+      if (_epoch != ep) return;
       final code = e.response?.statusCode;
       if (code == 409) {
-        // generation 变化：暂停旧上下文提交，重新 bootstrap
+        final errCode = _errorCodeOf(e);
+        if (errCode == 'IDEMPOTENCY_CONFLICT') {
+          // 同 requestId 不同内容：放弃旧请求，下轮以新请求重建
+          state.pendingPush = null;
+          await _persist();
+          throw SyncException('IDEMPOTENCY_CONFLICT', '请求上下文冲突，已重建');
+        }
+        // generation 变化：旧上下文的请求永远无法成功，丢弃并重新 bootstrap
+        state.pendingPush = null;
+        state.generation = null;
         state.bootstrapped = false;
         state.pullCursor = null;
         await _persist();
@@ -738,20 +888,44 @@ class SyncEngine extends ChangeNotifier {
     }
   }
 
+  /// 从错误响应体解析服务端 ErrorCode（openapi ErrorResponse.code）。
+  String? _errorCodeOf(DioException e) {
+    final data = e.response?.data;
+    if (data is Map) return data['code'] as String?;
+    if (data is String) {
+      try {
+        final j = jsonDecode(data);
+        if (j is Map) return j['code'] as String?;
+      } catch (_) {}
+    }
+    return null;
+  }
+
   // ---------- 冲突解决 ----------
 
   /// 保留本机：以远端 revision 为 base 提交新版本。
+  /// 请求先持久化为 pendingPush：响应丢失时按原 requestId 幂等重试。
   Future<void> resolveKeepLocal(String kind, String id) async {
     final c = state.conflicts
         .firstWhere((c) => c.kind == kind && c.id == id && !c.resolved);
-    final bytes = kind == 'todo'
-        ? todoBytes(model.byId(id)!)
-        : kind == 'classification'
-            ? classificationBytes()
-            : indexBytes();
+    final Uint8List bytes;
+    if (kind == 'todo') {
+      bytes = todoBytes(model.byId(id)!);
+    } else if (kind == 'classification') {
+      bytes = classificationBytes();
+    } else if (kind == 'index') {
+      bytes = indexBytes();
+    } else {
+      // image：从本地文件读取原始字节
+      final ext = _imageExtFor(id);
+      if (ext == null) throw SyncException('IMAGE_MISSING', '本地图片文件缺失');
+      bytes = await File(
+              '${model.store.imagesDir.path}/$id${id.contains('.') ? '' : '.$ext'}')
+          .readAsBytes();
+    }
     final hash = sha256Of(bytes);
     await _ensurePayloadUploaded(hash, bytes);
-    await _submitPush(PendingPush(_newRequestId(), state.generation ?? 1, [
+    final pending = PendingPush(_newRequestId(), state.generation ?? 1, [
       {
         'kind': kind,
         'id': id,
@@ -762,72 +936,180 @@ class SyncEngine extends ChangeNotifier {
         'updatedAt': DateTime.now().toUtc().toIso8601String(),
         'deviceId': model.deviceId,
       }
-    ], []));
-    c.resolved = true;
+    ], []);
+    state.pendingPush = pending;
+    await _persist();
+    await _submitPush(pending);
+    if (state.pendingPush != null) return; // 提交失败：保持未解决，待重试
+    state.conflicts.remove(c);
+    state.rejected.remove(state.baselineKey(kind, id));
     await _persist();
     notifyListeners();
   }
 
   /// 采用远端：拉取远端对象覆盖本机（恢复副本由 store 保存流程自动保留）。
+  /// push 冲突（无远端 hash）与删除冲突按各自语义处理：
+  /// - 无 hash：丢弃本地基线并触发重新 bootstrap，由快照重新应用远端版本；
+  /// - 远端为删除墓碑：接受删除（移除本地文件并确认基线）。
   Future<void> resolveUseRemote(String kind, String id) async {
     final c = state.conflicts
         .firstWhere((c) => c.kind == kind && c.id == id && !c.resolved);
     final hash = c.remoteContentHash;
-    if (hash != null) {
+    if (c.remoteDeleted) {
+      // 接受删除：删除本地内容，基线记为墓碑已确认
+      if (kind == 'todo') {
+        await model.store.deleteTodoFile(id);
+        model.todos.removeWhere((t) => t.id == id);
+      } else if (kind == 'image') {
+        final ext = _imageExtFor(id);
+        if (ext != null) {
+          final f = File('${model.store.imagesDir.path}/$id'
+              '${id.contains('.') ? '' : '.$ext'}');
+          if (await f.exists()) await f.delete();
+        }
+      }
+      state.baselines[state.baselineKey(kind, id)] =
+          ObjectBaseline(kind, id, c.remoteRevision, null);
+    } else if (hash != null) {
       final bytes = await _downloadPayload(hash);
       if (sha256Of(bytes) == hash) {
         await _writeRemoteObject(kind, id, bytes);
         state.baselines[state.baselineKey(kind, id)] =
             ObjectBaseline(kind, id, c.remoteRevision, hash);
       }
+    } else {
+      // push 冲突无远端 hash：丢弃基线，重新 bootstrap 拉取远端当前版本
+      state.baselines.remove(state.baselineKey(kind, id));
+      state.bootstrapped = false;
+      state.pullCursor = null;
     }
-    c.resolved = true;
+    state.conflicts.remove(c);
     await _persist();
     notifyListeners();
   }
 
   // ---------- 顶层同步 ----------
 
-  Future<void> syncNow() async {
-    if (busy) return;
-    busy = true;
-    status = SyncStatus.syncing;
-    notifyListeners();
-    try {
-      if (!state.bootstrapped) {
-        await bootstrapAndApply();
-        if (status == SyncStatus.error) return;
+  /// 本地是否有未同步变更（供 UI 显示"待同步"）。
+  bool get hasUnsyncedChanges {
+    if (state.pendingPush != null) return true;
+    for (final t in model.todos) {
+      final base = state.baselines[state.baselineKey('todo', t.id)];
+      if (base == null || base.revision < t.revision) {
+        if (state.rejected[state.baselineKey('todo', t.id)] == null ||
+            state.rejected[state.baselineKey('todo', t.id)]!.revision <
+                t.revision) {
+          return true;
+        }
       }
-      await pull();
-      await pushDirty();
-      status = state.pendingPush != null
-          ? SyncStatus.partialFailed
-          : state.conflicts.any((c) => !c.resolved)
-              ? SyncStatus.conflict
-              : SyncStatus.synced;
-      lastError = null;
+    }
+    return false;
+  }
+
+  /// 手动同步不受退避与暂停限制；自动触发（保存后/定时/前台恢复）受限。
+  Future<void> syncNow({bool manual = false}) async {
+    if (busy) return;
+    if (!manual) {
+      if (state.submitPaused != null) return; // 登录失效/撤销/维护：暂停自动提交
+      if (_backoffActive) return; // 失败退避中
+    }
+    // 跨进程互斥：前台与 WorkManager 后台同轮只允许一个写入者
+    final lock = await _SyncLock.acquire(model.store.stateDir.path);
+    if (lock == null) return;
+    busy = true;
+    final ep = _epoch;
+    var retriedGeneration = false;
+    try {
+      while (true) {
+        status = SyncStatus.syncing;
+        notifyListeners();
+        try {
+          if (!state.bootstrapped) {
+            await bootstrapAndApply();
+          }
+          if (_epoch != ep) return;
+          await pull();
+          await pushDirty();
+          state.submitPaused = null;
+          _consecutiveFailures = 0;
+          _lastFailureAt = null;
+          status = state.pendingPush != null || state.rejected.isNotEmpty
+              ? SyncStatus.partialFailed
+              : state.conflicts.any((c) => !c.resolved)
+                  ? SyncStatus.conflict
+                  : SyncStatus.synced;
+          lastError = null;
+          break;
+        } on SyncException catch (e) {
+          if (_epoch != ep) return;
+          if (e.code == 'GENERATION_MISMATCH' && !retriedGeneration) {
+            // 重新 bootstrap 后再试一轮
+            retriedGeneration = true;
+            continue;
+          }
+          rethrow;
+        }
+      }
     } on SyncException catch (e) {
-      status = SyncStatus.error;
-      lastError = e.message;
+      if (_epoch == ep) {
+        status = SyncStatus.error;
+        lastError = e.message;
+        _noteFailure();
+      }
     } on DioException catch (e) {
-      status = SyncStatus.error;
-      lastError = _dioMessage(e, '同步失败');
+      if (_epoch == ep) {
+        status = SyncStatus.error;
+        lastError = _dioMessage(e, '同步失败');
+        _noteFailure(e);
+      }
     } catch (e) {
-      status = SyncStatus.error;
-      lastError = e.toString();
+      if (_epoch == ep) {
+        status = SyncStatus.error;
+        lastError = e.toString();
+        _noteFailure();
+      }
     } finally {
-      busy = false;
-      notifyListeners();
+      lock.release();
+      if (_epoch == ep) {
+        busy = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  void _noteFailure([DioException? e]) {
+    _consecutiveFailures++;
+    _lastFailureAt = DateTime.now();
+    // 登录失效/设备撤销/项目维护：暂停自动提交，直到手动同步成功或重连
+    final code = e?.response?.statusCode;
+    if (code == 401 || code == 403 || code == 423) {
+      state.submitPaused = _errorCodeOf(e!) ?? 'HTTP_$code';
+      _persist();
     }
   }
 
   Future<void> setAutoSync(bool enabled) async {
     state.autoSync = enabled;
+    if (enabled) state.submitPaused = null;
     await _persist();
     notifyListeners();
   }
 
   String _dioMessage(DioException e, String fallback) {
+    // 优先解析服务端 ErrorCode（openapi ErrorResponse.code）
+    switch (_errorCodeOf(e)) {
+      case 'ACCOUNT_DISABLED':
+        return '账号已被禁用';
+      case 'DEVICE_REVOKED':
+        return '设备已被撤销，请重新登录';
+      case 'AUTH_INVALID':
+      case 'SESSION_EXPIRED':
+        return '登录已失效，请重新登录';
+      case 'PROJECT_MAINTENANCE':
+        return '项目维护中，稍后再试';
+      case 'RATE_LIMITED':
+        return '请求过于频繁，稍后再试';
+    }
     switch (e.response?.statusCode) {
       case 401:
         return '登录已失效，请重新登录';
@@ -843,6 +1125,36 @@ class SyncEngine extends ChangeNotifier {
             ? '网络不可用'
             : fallback;
     }
+  }
+}
+
+/// 跨进程同步互斥锁：state/sync.lock 记录持有者与时间戳。
+/// 存在新鲜锁（<15 分钟，非本实例）时获取失败；陈旧锁视为崩溃残留可抢占。
+class _SyncLock {
+  final File _file;
+  _SyncLock(this._file);
+
+  static Future<_SyncLock?> acquire(String stateDir) async {
+    final f = File('$stateDir/sync.lock');
+    try {
+      if (await f.exists()) {
+        final raw = await f.readAsString();
+        final ts = int.tryParse(raw.split('\n').first) ?? 0;
+        final age = DateTime.now().millisecondsSinceEpoch - ts;
+        if (age < 15 * 60 * 1000 && age > -60 * 1000) return null; // 他人持有
+      }
+      await f.writeAsString(
+          '${DateTime.now().millisecondsSinceEpoch}\n', flush: true);
+      return _SyncLock(f);
+    } catch (_) {
+      return null; // 锁文件不可写：保守放弃本轮
+    }
+  }
+
+  Future<void> release() async {
+    try {
+      await _file.delete();
+    } catch (_) {}
   }
 }
 

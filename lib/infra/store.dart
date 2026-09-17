@@ -113,17 +113,21 @@ class TodoStore {
 
   // ---------- classification ----------
 
-  Future<Classification> loadClassification() async {
+  /// 返回 (数据, 是否损坏)。损坏时备份原件并返回空，不阻断启动；
+  /// 调用方据损坏标志进入只读/暂停推送状态（设计 §4.1）。
+  Future<(Classification, bool)> loadClassification() async {
     final f = classificationFile;
-    if (!await f.exists()) return Classification([], []);
+    if (!await f.exists()) return (Classification([], []), false);
     try {
       final raw = await f.readAsString();
-      return Classification.fromJson(
-          (jsonDecode(raw) as Map).cast<String, Object?>(), raw: raw);
+      return (
+        Classification.fromJson(
+            (jsonDecode(raw) as Map).cast<String, Object?>(), raw: raw),
+        false
+      );
     } catch (_) {
-      // 损坏时备份原件并返回空，避免阻断启动
       await _keepRecoveryCopy('classification.json', f);
-      return Classification([], []);
+      return (Classification([], []), true);
     }
   }
 
@@ -157,15 +161,15 @@ class TodoStore {
 
   // ---------- index（自定义排序 + 墓碑） ----------
 
-  Future<IndexData> loadIndex() async {
+  Future<(IndexData, bool)> loadIndex() async {
     final f = indexFile;
-    if (!await f.exists()) return IndexData.empty();
+    if (!await f.exists()) return (IndexData.empty(), false);
     try {
       final j = jsonDecode(await f.readAsString()) as Map<String, Object?>;
-      return IndexData.fromJson(j);
+      return (IndexData.fromJson(j), false);
     } catch (_) {
       await _keepRecoveryCopy('index.json', f);
-      return IndexData.empty();
+      return (IndexData.empty(), true);
     }
   }
 

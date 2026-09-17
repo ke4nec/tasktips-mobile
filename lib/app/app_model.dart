@@ -27,6 +27,11 @@ class AppModel extends ChangeNotifier {
   IndexData index = IndexData.empty();
   List<CorruptTip> corrupt = [];
 
+  /// 本地索引/分类文件损坏（原件已备份到 recovery/）：
+  /// 同步引擎据此暂停自动推送，避免空对象反向覆盖远端（设计 §4.1）。
+  bool classificationCorrupt = false;
+  bool indexCorrupt = false;
+
   ThemeModeSetting themeMode = ThemeModeSetting.system;
   bool onboardingDone = false;
   DateTime _lastTodayRefresh = DateTime.now();
@@ -82,8 +87,12 @@ class AppModel extends ChangeNotifier {
     final scan = await scanF;
     todos = scan.todos;
     corrupt = scan.corrupt;
-    classification = await classificationF;
-    index = await indexF;
+    final clsResult = await classificationF;
+    classification = clsResult.$1;
+    classificationCorrupt = clsResult.$2;
+    final idxResult = await indexF;
+    index = idxResult.$1;
+    indexCorrupt = idxResult.$2;
     final s = await settingsF;
     themeMode = ThemeModeSetting.values
         .firstWhere((m) => m.name == s['theme'], orElse: () => ThemeModeSetting.system);
@@ -253,21 +262,13 @@ class AppModel extends ChangeNotifier {
         .where((t) => t.isDeleted && _isBefore(t.deletedAt, cutoff))
         .toList();
     if (expiredCats.isNotEmpty || expiredTags.isNotEmpty) {
+      // 分类/标签删除经 classification 整对象传播，不写 category/tag 墓碑
+      //（桌面端枚举只认 todo|classification|index|image）
       classification.categories.removeWhere(expiredCats.contains);
       classification.tags.removeWhere(expiredTags.contains);
-      for (final c in expiredCats) {
-        index.tombstones.add(
-            Tombstone(c.id, 'category', DateTime.now().toUtc(), 1, deviceId));
-      }
-      for (final tg in expiredTags) {
-        index.tombstones
-            .add(Tombstone(tg.id, 'tag', DateTime.now().toUtc(), 1, deviceId));
-      }
       await store.saveClassification(classification);
-      await store.saveIndex(index);
-      // 同步哈希缓存按版本失效：漏加会导致清理后的分类/索引被认为无变化而不上传
+      // 同步哈希缓存按版本失效：漏加会导致清理后的分类被认为无变化而不上传
       classificationVersion++;
-      indexVersion++;
       changed = true;
     }
     if (changed) notifyListeners();
@@ -303,15 +304,40 @@ class AppModel extends ChangeNotifier {
   // ---------- 分类用例 ----------
 
   Future<void> _saveClassification() async {
+    classification.dirty = true;
     await store.saveClassification(classification);
     classificationVersion++;
     notifyListeners();
   }
 
+  /// 批量写入 Todo（目录整树删除/恢复的 cohort 连带）：逐条落盘，
+  /// 全部成功后一次性广播并触发一次自动同步。
+  Future<void> _writeTodosBulk(Iterable<Todo> list) async {
+    final now = DateTime.now().toUtc();
+    for (final t in list) {
+      t.updatedAt = now;
+      t.revision += 1;
+      await store.saveTodo(t);
+      final i = todos.indexWhere((e) => e.id == t.id);
+      if (i >= 0) todos[i] = t;
+    }
+    notifyListeners();
+    scheduleAutoSync();
+  }
+
+  /// 名称校验对齐桌面端（classification.rs）：
+  /// 目录 2-50 字符且禁 `/\:*?"<>|`；标签 1-20 字符。
+  static const _forbiddenCategoryChars = r'/\:*?"<>|';
+
   String? validateCategoryName(String name, {String? parentId, String? excludeId}) {
     final n = name.trim();
-    if (n.isEmpty) return '名称不能为空';
-    if (n.length > 30) return '名称最多 30 字符';
+    final len = n.runes.length;
+    if (len < 2 || len > 50) return '目录名称长度必须是 2-50 个字符';
+    for (final ch in n.runes) {
+      if (_forbiddenCategoryChars.contains(String.fromCharCode(ch))) {
+        return '目录名称不允许包含特殊字符 ${String.fromCharCode(ch)}';
+      }
+    }
     final sameLevel = classification.categories.where((c) =>
         c.parentId == parentId &&
         !c.isDeleted &&
@@ -352,11 +378,16 @@ class AppModel extends ChangeNotifier {
         (id == newParentId || classification.subtreeOf(id).contains(newParentId))) {
       return '不能移动到自身或其子目录';
     }
-    if (newParentId != null && classification.depthOf(id) + 1 > 3) {
-      // 需要按最深子孙计算，此处按简化：目标深度+1 超限即拒绝
-      return '目录最多三级';
+    if (newParentId != null) {
+      // 按被移动子树的最深子孙校验：目标深度 + 子树高度 - 1 ≤ 3
+      final targetDepth = classification.depthOf(newParentId) + 1;
+      final height = classification.subtreeHeight(id);
+      if (targetDepth + height - 1 > 3) {
+        return '目录最多三级';
+      }
     }
     c.parentId = newParentId;
+    c.updatedAt = rfc3339Utc(DateTime.now().toUtc());
     await _saveClassification();
     return null;
   }
@@ -369,38 +400,92 @@ class AppModel extends ChangeNotifier {
     await _saveClassification();
   }
 
-  /// 软删除目录（整树），Todo 变为“未分类”语义（保留 categoryId 原值）。
+  /// 软删除目录（整树，桌面端 §3.2.3 模式二）：子树内目录与 Todo 以同一
+  /// cohort 时间戳一并软删除；父子引用原样保留（恢复时按原样回归）。
   Future<void> trashCategory(String id) async {
     final tree = classification.subtreeOf(id);
     final now = DateTime.now().toUtc();
+    final cohort = rfc3339Utc(now);
     for (final c in classification.categories) {
       if (tree.contains(c.id) && !c.isDeleted) {
-        c.deletedAt = rfc3339Utc(now);
-        c.updatedAt = rfc3339Utc(now);
+        c.deletedAt = cohort;
+        c.updatedAt = cohort;
+      }
+    }
+    // 子树内未删除的 Todo 同批移入回收站
+    final affected =
+        todos.where((t) => !t.isDeleted && t.categoryId != null && tree.contains(t.categoryId)).toList();
+    await _saveClassification();
+    await _writeTodosBulk(affected.map((t) => t..deletedAt = now));
+  }
+
+  /// 恢复目录（§5.2.2 按原样恢复）：清除本目录与仍处同批软删除状态的
+  /// 子目录，并恢复同批进入回收站的 Todo。引用关系不动：
+  /// 父目录已删/已清时按孤儿展示在根级（父目录之后恢复会自动归位）。
+  /// 同名冲突（删除期间同级新建了同名目录）时保留回收站条目并返回原因。
+  Future<String?> restoreCategory(String id) async {
+    final c = classification.byId(id);
+    if (c == null || !c.isDeleted) return null;
+    final cohort = c.deletedAt!;
+    final nameTaken = classification.categories.any((o) =>
+        o.id != c.id &&
+        !o.isDeleted &&
+        o.parentId == c.parentId &&
+        o.name.toLowerCase() == c.name.toLowerCase());
+    if (nameTaken) {
+      return '同级已存在同名目录“${c.name}”，请先重命名后再恢复';
+    }
+    final subtree = classification.trashedCohortOf(id, cohort);
+    final now = rfc3339Utc(DateTime.now().toUtc());
+    for (final sc in classification.categories) {
+      if (subtree.contains(sc.id) && sc.deletedAt == cohort) {
+        sc.deletedAt = null;
+        sc.updatedAt = now;
       }
     }
     await _saveClassification();
+    // 同批移入回收站的 Todo 一并恢复（此前单独删除的不动）
+    final affected = todos
+        .where((t) =>
+            t.isDeleted &&
+            t.categoryId != null &&
+            subtree.contains(t.categoryId) &&
+            _sameCohort(t.deletedAt!, cohort))
+        .toList();
+    await _writeTodosBulk(affected.map((t) => t..deletedAt = null));
+    return null;
   }
 
-  Future<void> restoreCategory(String id) async {
+  /// cohort 时间戳（秒/毫秒精度差）视为同批。
+  static bool _sameCohort(DateTime a, String cohort) {
+    final c = tryParseRfc3339(cohort);
+    return c != null && a.difference(c.toUtc()).abs() <= const Duration(seconds: 1);
+  }
+
+  /// 彻底删除目录（§5.2.3）：移除本目录与同批仍在回收站的子目录实体，
+  /// 并物理删除其下同批仍在回收站的 Todo（写 todo 墓碑）。
+  /// 分类/标签删除通过 classification 整对象传播，不写 category/tag 墓碑。
+  Future<void> _purgeCategoryNow(String id) async {
     final c = classification.byId(id);
     if (c == null || !c.isDeleted) return;
-    // 父目录已删除/不存在时提升为顶级
-    if (c.parentId != null) {
-      final parent = classification.byId(c.parentId!);
-      if (parent == null || parent.isDeleted) c.parentId = null;
+    final cohort = c.deletedAt!;
+    final subtree = classification.trashedCohortOf(id, cohort);
+    classification.categories.removeWhere((e) => subtree.contains(e.id));
+    final affected = todos
+        .where((t) =>
+            t.isDeleted &&
+            t.categoryId != null &&
+            subtree.contains(t.categoryId) &&
+            _sameCohort(t.deletedAt!, cohort))
+        .toList();
+    for (final t in affected) {
+      index.tombstones
+          .add(Tombstone(t.id, 'todo', DateTime.now().toUtc(), t.revision, deviceId));
+      indexVersion++;
+      await store.deleteTodoFile(t.id);
+      todos.removeWhere((e) => e.id == t.id);
     }
-    // 同名冲突：保留回收站条目并让调用方提示
-    c.deletedAt = null;
-    await _saveClassification();
-  }
-
-  Future<void> _purgeCategoryNow(String id) async {
-    classification.categories.removeWhere((c) => c.id == id);
-    index.tombstones
-        .add(Tombstone(id, 'category', DateTime.now().toUtc(), 1, deviceId));
-    indexVersion++;
-    await store.saveIndex(index);
+    if (affected.isNotEmpty) await store.saveIndex(index);
     await _saveClassification();
   }
 
@@ -408,8 +493,8 @@ class AppModel extends ChangeNotifier {
 
   String? validateTagName(String name, {String? excludeId}) {
     final n = name.trim();
-    if (n.isEmpty) return '名称不能为空';
-    if (n.length > 30) return '名称最多 30 字符';
+    final len = n.runes.length;
+    if (len < 1 || len > 20) return '标签名称长度必须是 1-20 个字符';
     final dup = classification.tags.any((t) =>
         t.id != excludeId && !t.isDeleted && t.name.toLowerCase() == n.toLowerCase());
     if (dup) return '已存在同名标签';
@@ -461,14 +546,26 @@ class AppModel extends ChangeNotifier {
     await _saveClassification();
   }
 
-  Future<void> restoreTag(String id) async {
+  /// 恢复标签（§5.2.2）：Todo 上的标签名在删除期间保留，恢复后关联自动还原。
+  /// 删除期间出现同名活跃标签时保留回收站条目并返回原因。
+  Future<String?> restoreTag(String id) async {
     final t = classification.tagById(id);
-    if (t == null || !t.isDeleted) return;
+    if (t == null || !t.isDeleted) return null;
+    final nameTaken = classification.tags.any((o) =>
+        o.id != t.id &&
+        !o.isDeleted &&
+        o.name.toLowerCase() == t.name.toLowerCase());
+    if (nameTaken) {
+      return '已存在同名标签“${t.name}”，请先重命名后再恢复';
+    }
     t.deletedAt = null;
+    t.updatedAt = rfc3339Utc(DateTime.now().toUtc());
     await _saveClassification();
+    return null;
   }
 
   /// 彻底删除：移除所有 Todo 中的标签名称。
+  /// 标签删除经 classification 整对象传播，不写 tag 墓碑。
   Future<void> purgeTag(String id) async {
     final t = classification.tagById(id);
     if (t == null) return;
@@ -479,10 +576,6 @@ class AppModel extends ChangeNotifier {
         await writeTodo(todo);
       }
     }
-    index.tombstones
-        .add(Tombstone(id, 'tag', DateTime.now().toUtc(), 1, deviceId));
-    indexVersion++;
-    await store.saveIndex(index);
     await _saveClassification();
   }
 

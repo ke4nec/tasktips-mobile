@@ -252,6 +252,33 @@ class Classification {
     return out;
   }
 
+  /// 同批次（deletedAt == cohort）软删除的子目录集合：从 rootId 沿
+  /// deletedAt == cohort 的链向下收集；更早/更晚单独删除的子目录不连带
+  ///（todo-classification-design.md §5.2 按原样恢复）。
+  Set<String> trashedCohortOf(String rootId, String cohort) {
+    final out = <String>{rootId};
+    var grew = true;
+    while (grew) {
+      grew = false;
+      for (final c in categories) {
+        if (c.parentId != null &&
+            out.contains(c.parentId) &&
+            c.deletedAt == cohort &&
+            out.add(c.id)) {
+          grew = true;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Todo 的目录是否为"未分类"：无目录、目录不存在或已进回收站。
+  bool isUncategorized(String? categoryId) {
+    if (categoryId == null || categoryId.isEmpty) return true;
+    final c = byId(categoryId);
+    return c == null || c.isDeleted;
+  }
+
   int depthOf(String id) {
     var depth = 1;
     var cur = byId(id);
