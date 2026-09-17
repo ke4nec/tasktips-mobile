@@ -25,9 +25,10 @@ android {
         applicationId = "dev.tasktips.tasktips"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        // 最低 Android 6.0（API 23）：由 workmanager 插件要求锁定，
-        // 不跟随 flutter 默认值，确保后台周期同步可用
-        minSdk = 23
+        // 最低 Android 7.0（API 24）：Flutter 3.47 工具会强制把 <24 的硬编码
+        // minSdk 迁移为 flutter.minSdkVersion（=24），23 基线在本工具链不可维持；
+        // workmanager 要求 23、file_picker 联邦实现要求 21，均被 24 覆盖
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)

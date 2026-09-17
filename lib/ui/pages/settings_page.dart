@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../../app/app_model.dart';
 import '../../infra/backup.dart';
@@ -202,7 +205,9 @@ class SettingsPage extends StatelessWidget {
     );
   }
 
-  /// 导出备份：经系统文件选择器保存 zip（SAF，无需存储权限）。
+  /// 导出备份：先在应用目录打包，再经 SAF 写出。
+  /// file_picker 13.x 的 saveFile 以 bytes 经 ContentResolver 写 content Uri
+  ///（旧版返回 content:// 字符串，dart:io 无法直接写）。
   Future<void> _exportBackup(BuildContext context) async {
     final now = DateTime.now();
     final name = 'tasktips-backup-${now.year.toString().padLeft(4, '0')}'
@@ -210,38 +215,46 @@ class SettingsPage extends StatelessWidget {
         '${now.day.toString().padLeft(2, '0')}-'
         '${now.hour.toString().padLeft(2, '0')}'
         '${now.minute.toString().padLeft(2, '0')}.zip';
-    final path = await FilePicker.saveFile(
-      dialogTitle: '导出备份',
-      fileName: name,
-      type: FileType.custom,
-      allowedExtensions: ['zip'],
-    );
-    if (path == null) return; // 用户取消
+    // 临时包：state/ 已排除系统云备份，导出后即删
+    final tmp = File(p.join(model.store.stateDir.path, 'backup-export.tmp.zip'));
     try {
-      await exportBackup(model.store, path, appVersion: appVersion);
+      await exportBackup(model.store, tmp.path, appVersion: appVersion);
+      final uri = await FilePicker.saveFile(
+        dialogTitle: '导出备份',
+        fileName: name,
+        type: FileType.custom,
+        allowedExtensions: ['zip'],
+        mimeType: 'application/zip',
+        bytes: await tmp.readAsBytes(),
+      );
+      if (uri == null) return; // 用户取消
+      if (context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('备份已导出')));
+      }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text('导出失败：$e')));
       }
       return;
-    }
-    if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('备份已导出')));
+    } finally {
+      try {
+        if (await tmp.exists()) await tmp.delete();
+      } catch (_) {}
     }
   }
 
   /// 恢复备份：覆盖本机全部内容（先快照现状，失败回滚），完成后重载并提示
   /// 将作为本机改动参与下次同步。
   Future<void> _importBackup(BuildContext context) async {
-    final picked = await FilePicker.pickFiles(
+    final picked = await FilePicker.pickFile(
       dialogTitle: '选择备份文件',
       type: FileType.custom,
       allowedExtensions: ['zip'],
     );
-    final path = picked?.files.single.path;
-    if (path == null) return; // 用户取消
+    final path = picked?.path;
+    if (path == null) return; // 用户取消或非 file:// 引用
     if (!context.mounted) return;
     final ok = await confirmDialog(context,
         title: '恢复备份',

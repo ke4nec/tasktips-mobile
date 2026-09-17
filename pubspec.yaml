@@ -42,7 +42,9 @@ dependencies:
   path: ^1.9.1
   tasktips_api:
     path: packages/tasktips_api
-  flutter_secure_storage: ^9.2.2
+  # 13.x file_picker 需要 win32 ^6.3（windows 传递依赖），secure_storage 9.x
+  # 锁 win32 ^5；11.x 的 windows 实现（4.2+）兼容 win32 ^6
+  flutter_secure_storage: ^11.2.0
   crypto: ^3.0.7
   receive_sharing_intent: ^1.9.0
   workmanager: ^0.10.10
@@ -52,7 +54,10 @@ dependencies:
   image_picker: ^1.2.3
   # 快照恢复请求（RestoreRequest oneOf）构造
   one_of: ^1.5.0
-  file_picker: ^11.0.3
+  # SAF 备份导出/恢复。13.x 联邦化后 Android 实现自带 AGP/newDsl 兼容层，
+  # saveFile 以 bytes 经 ContentResolver 写出（旧版返回 content:// 字符串
+  # 无法用 dart:io 写，且 11.0.3 在 AGP9+builtInKotlin=false 下不编译 Kotlin）
+  file_picker: ^13.1.0
   archive: ^4.3.0
 
 
