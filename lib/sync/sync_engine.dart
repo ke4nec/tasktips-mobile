@@ -9,6 +9,7 @@ import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:one_of/one_of.dart';
 import 'package:tasktips_api/tasktips_api.dart' as api;
 
 import '../app/app_model.dart';
@@ -198,6 +199,197 @@ class SyncEngine extends ChangeNotifier {
     final r = await _devicesApi.listDevices();
     devices = r.data!.items.toList();
     notifyListeners();
+  }
+
+  // ---------- 批次E/F：设备管理、改密、历史、快照与恢复 ----------
+
+  /// 重命名设备（displayName trim 后 1-128 字符）。成功返回 null，否则返回文案。
+  Future<String?> renameDevice(String deviceId, String name) async {
+    final n = name.trim();
+    if (n.isEmpty || n.runes.length > 128) return '设备名称长度必须是 1-128 个字符';
+    try {
+      await _devicesApi.updateDevice(
+          deviceId: deviceId,
+          updateDeviceRequest:
+              api.UpdateDeviceRequest((b) => b.displayName = n));
+      await refreshDevices();
+      return null;
+    } on DioException catch (e) {
+      return _dioMessage(e, '重命名失败');
+    }
+  }
+
+  /// 撤销设备。撤销本机时立即清空会话（等同退出登录，不再发起同步）；
+  /// 撤销其他设备后刷新列表。成功返回 null，否则返回文案。
+  Future<String?> revokeDevice(String deviceId) async {
+    final isSelf = deviceId == model.deviceId;
+    try {
+      await _devicesApi.revokeDevice(deviceId: deviceId);
+    } on DioException catch (e) {
+      return _dioMessage(e, '撤销失败');
+    }
+    if (isSelf) {
+      await logout();
+    } else {
+      try {
+        await refreshDevices();
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// 修改密码（新密码 ≥12 字符，契约 PasswordChangeRequest）。
+  /// 服务端会撤销该账号全部 refresh token：成功后验证一次本机会话，
+  /// 会话已失效则走终局处理要求重新登录。
+  Future<String?> changePassword(String current, String next) async {
+    if (next.length < 12) return '新密码长度至少 12 个字符';
+    try {
+      await _auth.changePassword(
+          passwordChangeRequest: api.PasswordChangeRequest((b) => b
+            ..currentPassword = current
+            ..newPassword = next));
+    } on DioException catch (e) {
+      return _dioMessage(e, '修改密码失败');
+    }
+    try {
+      final me = await _auth.getCurrentUser();
+      state.accountId = me.data!.id;
+      await _persist();
+      return null;
+    } on DioException catch (e) {
+      if (isTerminalAuthFailure(e)) {
+        await handleTerminalAuthFailure(e);
+        return '密码已修改，请重新登录';
+      }
+      return null; // 密码已修改，仅会话确认失败
+    }
+  }
+
+  /// 项目历史（信封列表）：支持 kind 筛选与 afterSequence 分页（limit 200）。
+  Future<api.HistoryResponse> fetchProjectHistory(
+      {int afterSequence = 0, int limit = 200, String? kind}) async {
+    _requireProject();
+    final r = await _syncApi.listProjectHistory(
+      projectId: state.projectId!,
+      afterSequence: afterSequence,
+      limit: limit,
+      kind: kind == null ? null : _kind(kind),
+    );
+    return r.data!;
+  }
+
+  /// 对象历史（信封列表）：墓碑行即“此版本为删除”。
+  Future<api.HistoryResponse> fetchObjectHistory(String kind, String objectId,
+      {int afterSequence = 0}) async {
+    _requireProject();
+    final r = await _syncApi.listObjectHistory(
+      projectId: state.projectId!,
+      kind: _kind(kind),
+      objectId: objectId,
+      afterSequence: afterSequence,
+    );
+    return r.data!;
+  }
+
+  /// 按需单条查看历史正文（服务端设计 §11.5：禁止因浏览历史批量下载 payload）。
+  /// 图片等二进制对象返回原始字节，由调用方按 kind 展示；失败返回 null。
+  Future<Uint8List?> fetchHistoryPayload(String contentHash) async {
+    _requireProject();
+    try {
+      final r = await _payloadsApi.getPayload(
+          projectId: state.projectId!, contentHash: contentHash);
+      return r.data;
+    } on DioException catch (e) {
+      lastError = _dioMessage(e, '正文加载失败');
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<List<api.Snapshot>> listSnapshots() async {
+    _requireProject();
+    final r = await _syncApi.listSnapshots(projectId: state.projectId!);
+    return r.data!.items.toList();
+  }
+
+  /// 立即创建快照。423 维护中 / 503 存储不可用按通用文案处理。
+  Future<String?> createSnapshot() async {
+    _requireProject();
+    try {
+      await _syncApi.createSnapshot(projectId: state.projectId!);
+      return null;
+    } on DioException catch (e) {
+      return _dioMessage(e, '创建快照失败');
+    }
+  }
+
+  /// 恢复原因校验：trim 后 1-512 字符（写入永久审计）。
+  static String? validateRestoreReason(String reason) {
+    final r = reason.trim();
+    if (r.isEmpty || r.runes.length > 512) return '恢复原因长度必须是 1-512 个字符';
+    return null;
+  }
+
+  /// 发起恢复：按快照或按目标 changeSequence 二选一，reason 必填。
+  /// 成功返回 job；恢复成功后服务端 generation+1，下一轮同步自动走
+  /// GENERATION_MISMATCH → 重新 bootstrap → 预览确认的既有链路。
+  Future<(api.RestoreJob?, String?)> createRestore(
+      {String? snapshotId,
+      int? targetChangeSequence,
+      required String reason}) async {
+    _requireProject();
+    final err = validateRestoreReason(reason);
+    if (err != null) return (null, err);
+    if ((snapshotId == null) == (targetChangeSequence == null)) {
+      return (null, '按快照与按时间点两种模式二选一');
+    }
+    final req = snapshotId != null
+        ? api.RestoreRequest((b) => b.oneOf = OneOfDynamic(
+            typeIndex: 0,
+            types: const [
+              api.RestoreSnapshotRequest,
+              api.RestoreSequenceRequest,
+            ],
+            value: api.RestoreSnapshotRequest((rb) => rb
+              ..snapshotId = snapshotId
+              ..reason = reason.trim())))
+        : api.RestoreRequest((b) => b.oneOf = OneOfDynamic(
+            typeIndex: 1,
+            types: const [
+              api.RestoreSnapshotRequest,
+              api.RestoreSequenceRequest,
+            ],
+            value: api.RestoreSequenceRequest((rb) => rb
+              ..targetChangeSequence = targetChangeSequence!
+              ..reason = reason.trim())));
+    try {
+      final r = await _syncApi.createRestore(
+          projectId: state.projectId!, restoreRequest: req);
+      return (r.data, null);
+    } on DioException catch (e) {
+      return (null, _dioMessage(e, '发起恢复失败'));
+    }
+  }
+
+  Future<api.RestoreJob?> fetchRestore(String restoreId) async {
+    _requireProject();
+    final r = await _syncApi.getRestore(
+        projectId: state.projectId!, restoreId: restoreId);
+    return r.data;
+  }
+
+  Future<String?> cancelRestore(String restoreId, String reason) async {
+    final err = validateRestoreReason(reason);
+    if (err != null) return err;
+    try {
+      await _syncApi.cancelRestore(
+          projectId: state.projectId!,
+          restoreId: restoreId,
+          reasonRequest: api.ReasonRequest((b) => b.reason = reason.trim()));
+      return null;
+    } on DioException catch (e) {
+      return _dioMessage(e, '取消恢复失败');
+    }
   }
 
   Future<List<api.Project>> listProjects() async {

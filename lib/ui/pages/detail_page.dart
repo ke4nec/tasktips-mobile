@@ -7,8 +7,10 @@ import 'package:image_picker/image_picker.dart';
 import '../../app/app_model.dart';
 import '../../domain/todo.dart';
 import '../../infra/store.dart';
+import '../app.dart';
 import '../theme.dart';
 import '../widgets.dart';
+import 'history_page.dart';
 
 /// Todo 编辑页：编辑/预览切换、400ms 防抖自动保存 + 2s 周期快照、
 /// 元数据（优先级/日期/目录/标签）、格式工具栏随键盘、移入回收站。
@@ -228,7 +230,10 @@ class _DetailPageState extends State<DetailPage> {
             ),
             PopupMenuButton<String>(
               onSelected: (v) async {
-                if (v == 'trash') {
+                if (v == 'history') {
+                  openSecondaryPage(context,
+                      HistoryPage(model: m, kind: 'todo', objectId: _id));
+                } else if (v == 'trash') {
                   final title = t.title.isEmpty ? '未命名 Todo' : t.title;
                   final ok = await confirmDialog(context,
                       title: '移入回收站',
@@ -244,6 +249,7 @@ class _DetailPageState extends State<DetailPage> {
                 }
               },
               itemBuilder: (_) => const [
+                PopupMenuItem(value: 'history', child: Text('查看历史')),
                 PopupMenuItem(value: 'trash', child: Text('移入回收站')),
               ],
             ),

@@ -576,4 +576,34 @@ void main() {
       expect(engine.state.rejected.containsKey(key), isFalse); // 成功清除
     });
   });
+
+  group('批次E/F 校验逻辑（免网络）', () {
+    test('renameDevice 名称长度校验', () async {
+      final (_, engine, _) = await _setup();
+      expect(await engine.renameDevice('d1', ''), isNotNull);
+      expect(await engine.renameDevice('d1', 'x' * 129), isNotNull);
+    });
+
+    test('changePassword 新密码长度校验', () async {
+      final (_, engine, _) = await _setup();
+      expect(await engine.changePassword('old', 'short'), isNotNull);
+    });
+
+    test('validateRestoreReason 长度校验', () {
+      expect(SyncEngine.validateRestoreReason(''), isNotNull);
+      expect(SyncEngine.validateRestoreReason('x' * 513), isNotNull);
+      expect(SyncEngine.validateRestoreReason('例行恢复'), isNull);
+    });
+
+    test('createRestore 模式二选一与原因校验（网络前拦截）', () async {
+      final (_, engine, _) = await _setup();
+      final (job1, err1) = await engine.createRestore(reason: '');
+      expect(job1, isNull);
+      expect(err1, isNotNull);
+      final (job2, err2) = await engine.createRestore(
+          snapshotId: 's1', targetChangeSequence: 5, reason: '测试');
+      expect(job2, isNull);
+      expect(err2, '按快照与按时间点两种模式二选一');
+    });
+  });
 }

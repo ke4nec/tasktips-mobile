@@ -7,6 +7,7 @@ import '../../sync/sync_engine.dart';
 import '../app.dart';
 import '../theme.dart';
 import '../widgets.dart' show confirmDialog;
+import 'history_page.dart';
 
 /// 同步页：连接服务端、项目选择、立即同步、自动同步开关、
 /// 状态与错误、冲突处理、多设备信息与本机同步日志。
@@ -339,6 +340,10 @@ class _SyncPageState extends State<SyncPage> {
         _devicesCard(context, a, sync),
         const SizedBox(height: 8),
         _logCard(context, a, sync),
+        const SizedBox(height: 8),
+        _accountCard(context, a, sync),
+        const SizedBox(height: 8),
+        _SnapshotRestoreSection(model: widget.model),
         const SizedBox(height: 12),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -628,6 +633,9 @@ class _SyncPageState extends State<SyncPage> {
                 Text('${sync.devices.length} 台',
                     style: TextStyle(fontSize: 13, color: a.muted)),
             ]),
+            const SizedBox(height: 4),
+            Text('“最近活动”仅为服务端记录的最后活跃时间，不代表实时在线。',
+                style: TextStyle(fontSize: 12, color: a.muted)),
             const SizedBox(height: 8),
             for (final d in sync.devices)
               Padding(
@@ -654,6 +662,24 @@ class _SyncPageState extends State<SyncPage> {
                       ],
                     ),
                   ),
+                  PopupMenuButton<String>(
+                    tooltip: '管理设备',
+                    icon: Icon(Icons.more_vert,
+                        size: 20, color: a.muted),
+                    onSelected: (v) {
+                      if (v == 'rename') {
+                        _renameDevice(context, sync, d);
+                      } else {
+                        _revokeDevice(context, sync, d);
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                          value: 'rename', child: Text('重命名')),
+                      PopupMenuItem(
+                          value: 'revoke', child: Text('撤销此设备')),
+                    ],
+                  ),
                 ]),
               ),
             TextButton.icon(
@@ -665,6 +691,139 @@ class _SyncPageState extends State<SyncPage> {
         ),
       ),
     );
+  }
+
+  /// 账号区：历史浏览与修改密码入口。
+  Widget _accountCard(BuildContext context, AppColors a, SyncEngine sync) {
+    return Card(
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.history),
+            title: const Text('同步历史'),
+            subtitle: const Text('按对象版本信封浏览'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => openSecondaryPage(
+                context, HistoryPage(model: widget.model)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.password_outlined),
+            title: const Text('修改密码'),
+            subtitle: const Text('成功后其他设备需重新登录'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _changePassword(context, sync),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _renameDevice(
+      BuildContext context, SyncEngine sync, api.Device d) async {
+    final ctrl = TextEditingController(text: d.displayName);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 16, right: 16, top: 16,
+            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('重命名设备', style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+                controller: ctrl,
+                autofocus: true,
+                maxLength: 128,
+                decoration:
+                    const InputDecoration(hintText: '设备名称（1-128 个字符）')),
+            const SizedBox(height: 12),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存')),
+          ],
+        ),
+      ),
+    );
+    final name = ctrl.text;
+    ctrl.dispose();
+    if (ok != true) return;
+    final err = await sync.renameDevice(d.id, name);
+    if (err != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
+  }
+
+  Future<void> _revokeDevice(
+      BuildContext context, SyncEngine sync, api.Device d) async {
+    final isSelf = d.id == widget.model.deviceId;
+    final ok = await confirmDialog(context,
+        title: '撤销此设备',
+        message: isSelf
+            ? '撤销本机设备将立即断开同步并清除本机凭据，需要重新登录。本地内容保留。此操作立即生效且不可恢复。'
+            : '撤销后该设备下次同步将收到“设备已被撤销”提示。此操作立即生效且不可恢复。',
+        confirmText: '撤销',
+        destructive: true);
+    if (!ok) return;
+    final err = await sync.revokeDevice(d.id);
+    if (err != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
+  }
+
+  Future<void> _changePassword(BuildContext context, SyncEngine sync) async {
+    final cur = TextEditingController();
+    final next = TextEditingController();
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 16, right: 16, top: 16,
+            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('修改密码', style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text('成功后其他设备需重新登录。',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: appColors(
+                        ctx, Theme.of(ctx).brightness)
+                        .muted)),
+            const SizedBox(height: 12),
+            TextField(
+                controller: cur,
+                obscureText: true,
+                decoration: const InputDecoration(labelText: '当前密码')),
+            const SizedBox(height: 8),
+            TextField(
+                controller: next,
+                obscureText: true,
+                decoration: const InputDecoration(
+                    labelText: '新密码', hintText: '至少 12 个字符')),
+            const SizedBox(height: 12),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('修改')),
+          ],
+        ),
+      ),
+    );
+    final c = cur.text, n = next.text;
+    cur.dispose();
+    next.dispose();
+    if (ok != true) return;
+    final err = await sync.changePassword(c, n);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(err ?? '密码修改成功')));
+    }
   }
 
   String _lastSeen(api.Device d) {
@@ -712,4 +871,346 @@ class _SyncPageState extends State<SyncPage> {
         'bootstrap' => '初始同步',
         _ => d,
       };
+}
+
+/// 高级区：快照与恢复。恢复会影响项目内所有设备；恢复成功后服务端
+/// generation+1，下一轮同步自动走既有“重新 bootstrap → 预览确认”链路。
+class _SnapshotRestoreSection extends StatefulWidget {
+  final AppModel model;
+  const _SnapshotRestoreSection({required this.model});
+
+  @override
+  State<_SnapshotRestoreSection> createState() =>
+      _SnapshotRestoreSectionState();
+}
+
+class _SnapshotRestoreSectionState extends State<_SnapshotRestoreSection> {
+  Future<List<api.Snapshot>>? _snapshotsFuture;
+  api.RestoreJob? _job;
+  bool _polling = false;
+
+  SyncEngine? get _sync => widget.model.sync;
+
+  @override
+  void dispose() {
+    _polling = false;
+    super.dispose();
+  }
+
+  bool _terminal(api.RestoreJob j) =>
+      j.status == api.RestoreJobStatusEnum.succeeded ||
+      j.status == api.RestoreJobStatusEnum.failed ||
+      j.status == api.RestoreJobStatusEnum.cancelled;
+
+  Future<void> _poll(String restoreId) async {
+    _polling = true;
+    while (_polling && mounted) {
+      await Future.delayed(const Duration(seconds: 3));
+      if (!_polling || !mounted) return;
+      try {
+        final j = await _sync!.fetchRestore(restoreId);
+        if (j == null || !mounted) return;
+        setState(() => _job = j);
+        if (_terminal(j)) {
+          _polling = false;
+          return;
+        }
+      } catch (_) {
+        return; // 网络失败停止轮询，用户可手动刷新
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final a = appColors(context, Theme.of(context).brightness);
+    final sync = _sync;
+    if (sync == null) return const SizedBox.shrink();
+    return Card(
+      child: ExpansionTile(
+        title: const Text('高级：快照与恢复'),
+        subtitle: Text('恢复会影响项目内所有设备',
+            style: TextStyle(fontSize: 12, color: a.warn)),
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text('快照'),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () async {
+                        final messenger = ScaffoldMessenger.of(context);
+                        final err = await sync.createSnapshot();
+                        if (!mounted) return;
+                        if (err != null) {
+                          messenger.showSnackBar(
+                              SnackBar(content: Text(err)));
+                        } else {
+                          setState(
+                              () => _snapshotsFuture = sync.listSnapshots());
+                        }
+                      },
+                      icon: const Icon(Icons.add, size: 16),
+                      label: const Text('立即创建快照'),
+                    ),
+                  ],
+                ),
+                FutureBuilder<List<api.Snapshot>>(
+                  future: _snapshotsFuture ??= sync.listSnapshots(),
+                  builder: (context, snap) {
+                    if (snap.connectionState == ConnectionState.waiting) {
+                      return const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: SizedBox(
+                            height: 18,
+                            width: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2)),
+                      );
+                    }
+                    if (snap.hasError) {
+                      return Row(
+                        children: [
+                          const Expanded(child: Text('快照列表加载失败')),
+                          TextButton(
+                            onPressed: () => setState(() =>
+                                _snapshotsFuture = sync.listSnapshots()),
+                            child: const Text('重试'),
+                          ),
+                        ],
+                      );
+                    }
+                    final list = snap.data ?? [];
+                    if (list.isEmpty) {
+                      return Text('暂无快照',
+                          style:
+                              TextStyle(fontSize: 13, color: a.muted));
+                    }
+                    return Column(
+                      children: [
+                        for (final s in list)
+                          ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: Text(
+                                'generation ${s.generation} · seq ${s.changeSequence}'),
+                            subtitle: Text(
+                                '${s.status.name} · ${s.createdAt.toLocal().toString().substring(0, 16)}',
+                                style: TextStyle(
+                                    fontSize: 12, color: a.muted)),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _restoreSheet(context, sync),
+                  icon: const Icon(Icons.restore, size: 16),
+                  label: const Text('从快照/时间点恢复'),
+                ),
+                if (_job != null) ...[
+                  const SizedBox(height: 8),
+                  _jobCard(context, a, sync, _job!),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _jobCard(
+      BuildContext context, AppColors a, SyncEngine sync, api.RestoreJob j) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: a.line),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('恢复任务 ${j.status.name}',
+              style:
+                  const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text(
+              '已恢复 ${j.restoredObjects} 对象 / ${j.restoredTombstones} 墓碑'
+              '${j.errorCode != null ? '（${j.errorCode}）' : ''}',
+              style: TextStyle(fontSize: 12, color: a.muted)),
+          if (j.status == api.RestoreJobStatusEnum.succeeded)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text('恢复成功：下一轮同步将自动重新拉取并进入预览确认。',
+                  style: TextStyle(fontSize: 12, color: a.brandInk)),
+            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              TextButton(
+                onPressed: () async {
+                  final updated = await sync.fetchRestore(j.id);
+                  if (updated != null && mounted) {
+                    setState(() => _job = updated);
+                  }
+                },
+                child: const Text('刷新状态'),
+              ),
+              if (!_terminal(j))
+                TextButton(
+                  onPressed: () => _cancelSheet(context, sync, j.id),
+                  child: Text('取消恢复',
+                      style: TextStyle(color: a.danger)),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _restoreSheet(BuildContext context, SyncEngine sync) async {
+    final seqCtrl = TextEditingController();
+    final reasonCtrl = TextEditingController();
+    String? snapshotId;
+    bool bySnapshot = true;
+    final snapshots = await sync.listSnapshots().catchError((_) => <api.Snapshot>[]);
+    if (!context.mounted) return;
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => Padding(
+          padding: EdgeInsets.only(
+              left: 16, right: 16, top: 16,
+              bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('发起恢复', style: Theme.of(ctx).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text('恢复会影响项目内所有设备，原因将写入永久审计。',
+                  style: TextStyle(
+                      fontSize: 13,
+                      color:
+                          appColors(ctx, Theme.of(ctx).brightness).warn)),
+              const SizedBox(height: 12),
+              SegmentedButton<bool>(
+                segments: const [
+                  ButtonSegment(value: true, label: Text('按快照')),
+                  ButtonSegment(value: false, label: Text('按时间点')),
+                ],
+                selected: {bySnapshot},
+                onSelectionChanged: (s) =>
+                    setSheet(() => bySnapshot = s.first),
+              ),
+              const SizedBox(height: 12),
+              if (bySnapshot)
+                DropdownButton<String>(
+                  isExpanded: true,
+                  value: snapshotId,
+                  hint: const Text('选择快照'),
+                  items: [
+                    for (final s in snapshots)
+                      DropdownMenuItem(
+                        value: s.id,
+                        child: Text(
+                            'generation ${s.generation} · ${s.createdAt.toLocal().toString().substring(0, 16)}'),
+                      ),
+                  ],
+                  onChanged: (v) => setSheet(() => snapshotId = v),
+                )
+              else
+                TextField(
+                  controller: seqCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                      labelText: '目标 changeSequence', hintText: '整数'),
+                ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: reasonCtrl,
+                maxLength: 512,
+                decoration: const InputDecoration(
+                    labelText: '恢复原因（必填，1-512 个字符）'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('发起恢复'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    final reason = reasonCtrl.text;
+    final seq = int.tryParse(seqCtrl.text.trim());
+    seqCtrl.dispose();
+    reasonCtrl.dispose();
+    if (ok != true) return;
+    final (job, err) = await sync.createRestore(
+      snapshotId: bySnapshot ? snapshotId : null,
+      targetChangeSequence: bySnapshot ? null : seq,
+      reason: reason,
+    );
+    if (!context.mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _job = job);
+    if (job != null) _poll(job.id);
+  }
+
+  Future<void> _cancelSheet(
+      BuildContext context, SyncEngine sync, String restoreId) async {
+    final reasonCtrl = TextEditingController();
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 16, right: 16, top: 16,
+            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('取消恢复', style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: reasonCtrl,
+              maxLength: 512,
+              decoration:
+                  const InputDecoration(labelText: '取消原因（必填）'),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('确认取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+    final reason = reasonCtrl.text;
+    reasonCtrl.dispose();
+    if (ok != true) return;
+    final err = await sync.cancelRestore(restoreId, reason);
+    if (!context.mounted) return;
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    } else {
+      final updated = await sync.fetchRestore(restoreId);
+      if (updated != null && mounted) setState(() => _job = updated);
+    }
+  }
 }
