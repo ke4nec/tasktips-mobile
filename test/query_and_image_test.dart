@@ -79,6 +79,72 @@ void main() {
     });
   });
 
+  group('目录+未分类组合为并集（桌面 matches_categories 语义）', () {
+    Todo cat(String id, String? categoryId) => Todo(
+          id: id,
+          title: id,
+          body: id,
+          categoryId: categoryId,
+          createdAt: DateTime.utc(2026, 1, 1),
+          updatedAt: DateTime.utc(2026, 1, 1),
+          deviceId: 'dev',
+        );
+    const today = '2026-09-17';
+    const active = {'c1'};
+
+    test('仅目录：命中 ID 集', () {
+      final todos = [cat('in', 'c1'), cat('out', 'c2'), cat('none', null)];
+      final r = runQuery(
+          todos, TodoQuery(view: TodoView.all, categoryIds: ['c1']),
+          today: today, activeCategoryIds: active);
+      expect(r.map((t) => t.id), ['in']);
+    });
+
+    test('仅未分类：含空目录与指向已删/不存在目录', () {
+      final todos = [cat('in', 'c1'), cat('null', null), cat('gone', 'c9')];
+      final r = runQuery(todos, TodoQuery(view: TodoView.all, uncategorized: true),
+          today: today, activeCategoryIds: active);
+      expect(r.map((t) => t.id).toSet(), {'null', 'gone'});
+    });
+
+    test('目录+未分类同时勾选：两者并集', () {
+      final todos = [cat('in', 'c1'), cat('null', null), cat('other', 'c2')];
+      final r = runQuery(
+          todos,
+          TodoQuery(
+              view: TodoView.all, categoryIds: ['c1'], uncategorized: true),
+          today: today, activeCategoryIds: active);
+      // c2 不在 active 集 → 按未分类口径，同样命中
+      expect(r.map((t) => t.id).toSet(), {'in', 'null', 'other'});
+    });
+  });
+
+  group('搜索覆盖代码围栏内容', () {
+    test('围栏内代码可搜，围栏标记行不干扰', () {
+      final todos = [
+        Todo(
+          id: 'code',
+          title: '笔记',
+          body: '说明文字\n```dart\nflutterSecureStorage\n```\n尾部',
+          createdAt: DateTime.utc(2026, 1, 1),
+          updatedAt: DateTime.utc(2026, 1, 1),
+          deviceId: 'dev',
+        ),
+        Todo(
+          id: 'other',
+          title: '其他',
+          body: '毫不相关的内容',
+          createdAt: DateTime.utc(2026, 1, 1),
+          updatedAt: DateTime.utc(2026, 1, 1),
+          deviceId: 'dev',
+        ),
+      ];
+      final r = runQuery(todos, TodoQuery(view: TodoView.all, search: 'fluttersecurestorage'),
+          today: '2026-09-17');
+      expect(r.map((t) => t.id), ['code']);
+    });
+  });
+
   group('图片导入校验', () {
     late Directory dir;
     late TodoStore store;
@@ -141,6 +207,32 @@ void main() {
       big[2] = 0x4E;
       big[3] = 0x47;
       expect(() => store.saveImage(big), throwsA(isA<ImageRejectException>()));
+    });
+
+    test('sniff 越界守卫：8-11 字节 RIFF 头不抛异常且返回 null', () {
+      // 长度守卫不足时 b[8..11] 会抛 RangeError；应安全返回 null
+      expect(
+          TodoStore.sniffImageExtension(
+              Uint8List.fromList([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0])),
+          isNull);
+      expect(TodoStore.sniffImageExtension(Uint8List.fromList([0x89])), isNull);
+      expect(TodoStore.sniffImageExtension(Uint8List(0)), isNull);
+    });
+
+    test('sniff GIF 仅接受 GIF87a/GIF89a 全 6 字节', () {
+      expect(
+          TodoStore.sniffImageExtension(
+              Uint8List.fromList([0x47, 0x49, 0x46, 0x38, 0x37, 0x61])),
+          'gif');
+      expect(
+          TodoStore.sniffImageExtension(
+              Uint8List.fromList([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])),
+          'gif');
+      // GIF80a 等非标准头拒绝
+      expect(
+          TodoStore.sniffImageExtension(
+              Uint8List.fromList([0x47, 0x49, 0x46, 0x38, 0x30, 0x61])),
+          isNull);
     });
   });
 }

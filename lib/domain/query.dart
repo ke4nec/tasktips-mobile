@@ -74,11 +74,23 @@ bool _matchesView(Todo t, TodoView view, String today) {
   }
 }
 
-final _codeBlockRe = RegExp(r'```[\s\S]*?```');
 final _markerRe = RegExp(r'[#*_`~>\[\]()!|-]');
 
-String _stripToPlainText(String md) =>
-    md.replaceAll(_codeBlockRe, ' ').replaceAll(_markerRe, ' ');
+/// Markdown 纯文本化（供搜索匹配）：与桌面端 `plain_text` 语义一致——
+/// 围栏标记行丢弃，围栏内代码内容保留可搜；围栏外剥离行内标记。
+String _stripToPlainText(String md) {
+  final buf = <String>[];
+  var inFence = false;
+  for (final rawLine in md.split('\n')) {
+    final trimmed = rawLine.trim();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
+      continue;
+    }
+    buf.add(inFence ? rawLine : rawLine.replaceAll(_markerRe, ' '));
+  }
+  return buf.join(' ');
+}
 
 /// 过滤 + 排序。today 由调用方传入以便测试跨日场景。
 /// [activeCategoryIds] 为当前未删除目录 ID 集：categoryId 指向不存在或
@@ -121,13 +133,18 @@ List<Todo> runQuery(
   if (q.priorities.isNotEmpty) {
     it = it.where((t) => q.priorities.contains(t.priority));
   }
-  if (q.categoryIds != null && q.categoryIds!.isNotEmpty) {
-    it = it.where((t) => t.categoryId == null
-        ? false
-        : q.categoryIds!.contains(t.categoryId));
-  }
-  if (q.uncategorized) {
-    it = it.where(uncategorized);
+  // 目录筛选（桌面 matches_categories 语义）：命中 ID 任一，或（勾选未分类时）
+  // 无目录（categoryId 为空/指向已删或不存在目录）——两者取并集，单谓词一次判定。
+  if ((q.categoryIds != null && q.categoryIds!.isNotEmpty) ||
+      q.uncategorized) {
+    it = it.where((t) {
+      final cat = uncategorized(t) ? null : t.categoryId;
+      final inIds = cat != null &&
+          q.categoryIds != null &&
+          q.categoryIds!.contains(cat);
+      if (q.uncategorized) return inIds || cat == null;
+      return inIds;
+    });
   }
   if (q.dueFrom != null) {
     it = it.where((t) => t.dueDate != null && t.dueDate!.compareTo(q.dueFrom!) >= 0);
