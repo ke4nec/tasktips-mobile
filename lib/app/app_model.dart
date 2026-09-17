@@ -604,13 +604,139 @@ class AppModel extends ChangeNotifier {
 
   List<Tag> get visibleTags => classification.tags.where((t) => !t.isDeleted).toList();
 
+  /// 标签分组固定顺序（桌面 GROUP_ORDER）：约定分组在前，自定义组随后按名称。
+  static const kTagGroupOrder = ['优先级', '状态', '属性', '其他'];
+
+  /// 分组名归一：trim 后空白归默认组。
+  static String normalizeTagGroup(String group) {
+    final g = group.trim();
+    return g.isEmpty ? kDefaultTagGroup : g;
+  }
+
+  /// 分组名校验：trim 后 1-20 字符（空白视为默认组，不报错）。
+  static String? validateTagGroup(String group) {
+    final g = group.trim();
+    if (g.isEmpty) return null;
+    if (g.runes.length > 20) return '分组名称长度不能超过 20 个字符';
+    return null;
+  }
+
   Map<String, List<Tag>> get tagsByGroup {
     final map = <String, List<Tag>>{};
     for (final t in visibleTags) {
-      map.putIfAbsent(t.group.isEmpty ? '其他' : t.group, () => []).add(t);
+      map.putIfAbsent(normalizeTagGroup(t.group), () => []).add(t);
     }
-    final keys = map.keys.toList()..sort();
+    // “其他”组空也保留标题
+    map.putIfAbsent(kDefaultTagGroup, () => []);
+    // 组内按使用次数降序，次数同则按名称升序（桌面 classification_service 语义）
+    final usage = <String, int>{};
+    for (final todo in todos) {
+      if (todo.isDeleted) continue;
+      for (final name in todo.tags) {
+        usage[name] = (usage[name] ?? 0) + 1;
+      }
+    }
+    for (final e in map.entries) {
+      e.value.sort((a, b) {
+        final ua = usage[a.name] ?? 0, ub = usage[b.name] ?? 0;
+        if (ua != ub) return ub - ua;
+        return a.name.compareTo(b.name);
+      });
+    }
+    final keys = map.keys.toList()
+      ..sort((a, b) {
+        final ia = kTagGroupOrder.indexOf(a), ib = kTagGroupOrder.indexOf(b);
+        if (ia != ib) {
+          if (ia == -1) return 1;
+          if (ib == -1) return -1;
+          return ia - ib;
+        }
+        return a.compareTo(b);
+      });
     return {for (final k in keys) k: map[k]!};
+  }
+
+  /// 隐式标签转正：Todo 上使用但未注册实体的标签名，先注册为实体。
+  /// 已存在返回实体 id；名称非法返回 null。
+  Future<String?> ensureTag(String name) async {
+    final n = name.trim();
+    if (n.isEmpty || n.runes.length > 20) return null;
+    final existing = classification.tagByName(n);
+    if (existing != null) return existing.id;
+    final t = Tag(id: newUlid(), name: n);
+    classification.tags.add(t);
+    await _saveClassification();
+    return t.id;
+  }
+
+  /// 设置单标签分组（桌面 set_tag_group 语义）。
+  Future<String?> setTagGroup(String tagId, String group) async {
+    final t = classification.tagById(tagId);
+    if (t == null) return '标签不存在';
+    final err = validateTagGroup(group);
+    if (err != null) return err;
+    t.group = normalizeTagGroup(group) == kDefaultTagGroup
+        ? ''
+        : group.trim();
+    t.updatedAt = rfc3339Utc(DateTime.now().toUtc());
+    await _saveClassification();
+    return null;
+  }
+
+  /// 重命名分组：默认组不可改；改名到已存在组被拒绝；组内标签共用同一 updatedAt。
+  Future<String?> renameTagGroup(String oldGroup, String newGroup) async {
+    final old = oldGroup.trim(), neu = newGroup.trim();
+    if (old == kDefaultTagGroup) return '默认分组不可重命名';
+    if (neu.isEmpty || neu.runes.length > 20) return '分组名称长度必须是 1-20 个字符';
+    final members = classification.tags
+        .where((t) => !t.isDeleted && normalizeTagGroup(t.group) == old)
+        .toList();
+    if (members.isEmpty) return '分组不存在';
+    if (classification.tags.any((t) =>
+        !t.isDeleted && normalizeTagGroup(t.group) == neu)) {
+      return '分组名称已存在：$neu；如需合并请删除原分组';
+    }
+    final now = rfc3339Utc(DateTime.now().toUtc());
+    for (final t in members) {
+      t.group = neu;
+      t.updatedAt = now;
+    }
+    await _saveClassification();
+    return null;
+  }
+
+  /// 删除分组：组内活跃标签回到“其他”，不删标签。
+  Future<String?> deleteTagGroup(String group) async {
+    final g = group.trim();
+    if (g == kDefaultTagGroup) return '默认分组不可删除';
+    final members = classification.tags
+        .where((t) => !t.isDeleted && normalizeTagGroup(t.group) == g)
+        .toList();
+    if (members.isEmpty) return '分组不存在';
+    final now = rfc3339Utc(DateTime.now().toUtc());
+    for (final t in members) {
+      t.group = '';
+      t.updatedAt = now;
+    }
+    await _saveClassification();
+    return null;
+  }
+
+  /// 保存 Inbox/All 自定义顺序（拖拽写回）：调用方传入当前视图可见 ID 顺序；
+  /// 过滤不存在 ID，已存储但不在可见列表的 ID（含回收站）按原相对顺序保留在后。
+  /// index 本身是同步对象，写回后走整对象冲突流程。
+  Future<void> saveCustomOrder(String view, List<String> visibleIds) async {
+    assert(view == 'inbox' || view == 'all');
+    final existing = todos.map((t) => t.id).toSet();
+    final visible = visibleIds.where(existing.contains).toList();
+    final old = index.customOrder[view] ?? const [];
+    final tail =
+        old.where((id) => existing.contains(id) && !visible.contains(id));
+    index.customOrder[view] = [...visible, ...tail];
+    indexVersion++;
+    await store.saveIndex(index);
+    notifyListeners();
+    scheduleAutoSync();
   }
 
   List<Category> get rootCategories => classification.categories

@@ -248,6 +248,70 @@ void main() {
     });
   });
 
+  group('标签分组管理（桌面 classification_service 语义）', () {
+    test('setTagGroup/rename/delete + 默认组保护 + 隐式转正', () async {
+      expect(await model.createTag('甲'), isNull);
+      expect(await model.createTag('乙'), isNull);
+      final a = model.visibleTags.firstWhere((t) => t.name == '甲');
+      final b = model.visibleTags.firstWhere((t) => t.name == '乙');
+      expect(await model.setTagGroup(a.id, '  工作  '), isNull);
+      expect(
+          AppModel.normalizeTagGroup(
+              model.classification.tagById(a.id)!.group),
+          '工作');
+      expect(await model.setTagGroup(a.id, 'x' * 21), isNotNull); // 超长
+      // 重命名：同 updatedAt 批量更新
+      expect(await model.setTagGroup(b.id, '工作'), isNull);
+      expect(await model.renameTagGroup('工作', '生活'), isNull);
+      expect(
+          model.classification.tags
+              .where((t) => !t.isDeleted)
+              .map((t) => AppModel.normalizeTagGroup(t.group))
+              .toSet(),
+          {'生活'});
+      // 改名到已存在组被拒绝
+      expect(await model.createTag('丙'), isNull);
+      final c = model.visibleTags.firstWhere((t) => t.name == '丙');
+      expect(await model.setTagGroup(c.id, '其他组'), isNull);
+      expect(await model.renameTagGroup('生活', '其他组'), isNotNull);
+      // 默认组不可改/删
+      expect(await model.renameTagGroup('其他', '新组'), isNotNull);
+      expect(await model.deleteTagGroup('其他'), isNotNull);
+      // 删除分组：成员回“其他”，标签保留
+      expect(await model.deleteTagGroup('生活'), isNull);
+      expect(
+          model.classification.tags
+              .where((t) => !t.isDeleted && (t.name == '甲' || t.name == '乙'))
+              .every((t) => AppModel.normalizeTagGroup(t.group) == '其他'),
+          isTrue);
+      // 隐式标签转正后入组
+      await model.createTodo(tagName: '隐式');
+      expect(model.classification.tagByName('隐式'), isNull);
+      final implicitId = await model.ensureTag('隐式');
+      expect(implicitId, isNotNull);
+      expect(await model.setTagGroup(implicitId!, '生活'), isNull);
+      // 分组排序：约定组（其他）在前，自定义组随后按名称
+      final keys = model.tagsByGroup.keys.toList();
+      expect(keys.first, '其他');
+      expect(keys.toSet(), {'其他', '其他组', '生活'});
+    });
+  });
+
+  group('customOrder 写回', () {
+    test('saveCustomOrder 过滤不存在 ID 并保留回收站 ID', () async {
+      final a = await model.createTodo();
+      final b = await model.createTodo();
+      final c = await model.createTodo();
+      await model.trashTodo(c.id); // 回收站 ID 应保留
+      model.index.customOrder['inbox'] = [c.id, '不存在的ID'];
+      await model.saveCustomOrder('inbox', [b.id, a.id]);
+      expect(model.index.customOrder['inbox'], [b.id, a.id, c.id]);
+      // 写回后查询仍按数组序置前
+      final inbox = model.query(TodoQuery(view: TodoView.inbox));
+      expect(inbox.map((t) => t.id).take(2), [b.id, a.id]);
+    });
+  });
+
   group('deriveTitle 剥离规则（对齐桌面 markdown.ts）', () {
     test('链接与图片保留可见文本', () {
       expect(deriveTitle('[链接文本](https://a.b)'), '链接文本');

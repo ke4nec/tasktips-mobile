@@ -137,29 +137,52 @@ class _InboxPageState extends State<InboxPage>
                 }}';
           final highPriority =
               list.any((t) => t.priority == 3) ? ' · 高优先级' : '';
+          // 自定义顺序拖拽：仅默认排序 + Inbox/All 视图 + 无搜索筛选时启用
+          //（桌面设计语义；筛选/显式排序态禁用，避免整组覆盖丢失旧顺序）
+          final reorderable = _q.defaultSort &&
+              (_q.view == TodoView.inbox || _q.view == TodoView.all) &&
+              !_q.hasActiveFilter;
+          final reorderHint = reorderable ? ' · 长按拖动排序' : '';
           return Column(
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('${list.length} 项$highPriority$sortLabel',
+                  child: Text('${list.length} 项$highPriority$sortLabel$reorderHint',
                       style: TextStyle(
                           fontSize: 12, color: appColors(context, Theme.of(context).brightness).muted)),
                 ),
               ),
               Expanded(
-                child: ListView.builder(
-                  controller: _scrollCtrl,
-                  padding: const EdgeInsets.only(top: 4),
-                  itemCount: list.length,
-                  itemBuilder: (context, i) => TodoTile(
-                    model: widget.model,
-                    todo: list[i],
-                    showCategory: true,
-                    onOpen: () => openDetailPage(context, widget.model, list[i].id),
-                  ),
-                ),
+                child: reorderable
+                    ? ReorderableListView.builder(
+                        padding: const EdgeInsets.only(top: 4),
+                        itemCount: list.length,
+                        // onReorderItem 已按移除语义调整 newIndex，无需手动 -1
+                        onReorderItem: (oldI, newI) =>
+                            _onReorder(list, oldI, newI),
+                        itemBuilder: (context, i) => TodoTile(
+                          key: ValueKey(list[i].id),
+                          model: widget.model,
+                          todo: list[i],
+                          showCategory: true,
+                          onOpen: () =>
+                              openDetailPage(context, widget.model, list[i].id),
+                        ),
+                      )
+                    : ListView.builder(
+                        controller: _scrollCtrl,
+                        padding: const EdgeInsets.only(top: 4),
+                        itemCount: list.length,
+                        itemBuilder: (context, i) => TodoTile(
+                          model: widget.model,
+                          todo: list[i],
+                          showCategory: true,
+                          onOpen: () =>
+                              openDetailPage(context, widget.model, list[i].id),
+                        ),
+                      ),
               ),
             ],
           );
@@ -197,8 +220,17 @@ class _InboxPageState extends State<InboxPage>
     );
   }
 
-  void _openFilterSheet() {
-    showModalBottomSheet<void>(
+  /// 拖拽写回：将当前视图完整 ID 顺序存入 customOrder[index/all]，
+  /// 由 AppModel 过滤不存在 ID 并保留回收站 ID 后原子落盘。
+  Future<void> _onReorder(List<Todo> list, int oldI, int newI) async {
+    final ids = list.map((t) => t.id).toList();
+    final moved = ids.removeAt(oldI);
+    ids.insert(newI, moved);
+    final viewKey = _q.view == TodoView.all ? 'all' : 'inbox';
+    await widget.model.saveCustomOrder(viewKey, ids);
+  }
+
+  void _openFilterSheet() {    showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => _FilterSheet(

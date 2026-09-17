@@ -285,11 +285,45 @@ class _FolderPageState extends State<FolderPage> {
       children: [
         for (final e in groups.entries) ...[
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: Text(e.key,
-                style: TextStyle(
-                    fontSize: 13, fontWeight: FontWeight.w700, color: a.muted)),
+            padding: const EdgeInsets.fromLTRB(16, 12, 4, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(e.key,
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: a.muted)),
+                ),
+                // 默认组不可重命名/删除（桌面 classification_service 语义）
+                if (e.key != kDefaultTagGroup)
+                  PopupMenuButton<String>(
+                    tooltip: '管理分组',
+                    icon: Icon(Icons.more_horiz,
+                        size: 20, color: a.muted),
+                    onSelected: (v) {
+                      if (v == 'rename') {
+                        _editTagGroup(context, e.key);
+                      } else {
+                        _deleteTagGroup(context, e.key);
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(
+                          value: 'rename', child: Text('重命名分组')),
+                      PopupMenuItem(
+                          value: 'delete', child: Text('删除分组')),
+                    ],
+                  ),
+              ],
+            ),
           ),
+          if (e.value.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('空分组',
+                  style: TextStyle(fontSize: 12, color: a.muted)),
+            ),
           for (final tag in e.value)
             InkWell(
               onTap: () => openSecondaryPage(
@@ -320,6 +354,8 @@ class _FolderPageState extends State<FolderPage> {
                             _editTag(context, tag);
                           case 'color':
                             _pickColor(context, isCategory: false, id: tag.id);
+                          case 'group':
+                            _setTagGroup(context, tag);
                           case 'delete':
                             _deleteTag(context, tag);
                         }
@@ -327,6 +363,7 @@ class _FolderPageState extends State<FolderPage> {
                       itemBuilder: (_) => const [
                         PopupMenuItem(value: 'rename', child: Text('重命名')),
                         PopupMenuItem(value: 'color', child: Text('颜色')),
+                        PopupMenuItem(value: 'group', child: Text('设置分组')),
                         PopupMenuItem(value: 'delete', child: Text('删除')),
                       ],
                     ),
@@ -398,6 +435,113 @@ class _FolderPageState extends State<FolderPage> {
       destructive: true,
     );
     if (ok) await m.trashTag(tag.id);
+  }
+
+  /// 设置单标签分组：弹层列出现有分组或新建（1-20 字符，空白归“其他”）。
+  Future<void> _setTagGroup(BuildContext context, Tag tag) async {
+    final m = widget.model;
+    final groups = m.tagsByGroup.keys.toList();
+    final ctrl = TextEditingController();
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: EdgeInsets.only(
+              left: 16, right: 16, top: 16,
+              bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('设置分组（${tag.name}）',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final g in groups)
+                    FilterChip(
+                      label: Text(g),
+                      selected: AppModel.normalizeTagGroup(tag.group) == g,
+                      onSelected: (_) => Navigator.pop(ctx, g),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: ctrl,
+                decoration:
+                    const InputDecoration(hintText: '新建分组（1-20 个字符）'),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, '::new::${ctrl.text}'),
+                child: const Text('确定'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    ctrl.dispose();
+    if (choice == null) return;
+    final group =
+        choice.startsWith('::new::') ? choice.substring(7) : choice;
+    final err = await m.setTagGroup(tag.id, group);
+    if (err != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
+  }
+
+  Future<void> _editTagGroup(BuildContext context, String group) async {
+    final m = widget.model;
+    final ctrl = TextEditingController(text: group);
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 16, right: 16, top: 16,
+            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('重命名分组', style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(controller: ctrl, autofocus: true),
+            const SizedBox(height: 12),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存')),
+          ],
+        ),
+      ),
+    );
+    final name = ctrl.text;
+    ctrl.dispose();
+    if (ok != true) return;
+    final err = await m.renameTagGroup(group, name);
+    if (err != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
+  }
+
+  Future<void> _deleteTagGroup(BuildContext context, String group) async {
+    final m = widget.model;
+    final ok = await confirmDialog(
+      context,
+      title: '删除分组',
+      message: '将删除分组“$group”，组内标签将移入“其他”。标签本身保留。',
+      confirmText: '删除',
+      destructive: true,
+    );
+    if (!ok) return;
+    final err = await m.deleteTagGroup(group);
+    if (err != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    }
   }
 
   Future<void> _pickColor(BuildContext context,
