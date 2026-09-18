@@ -316,6 +316,41 @@ void main() {
     });
   }
 
+  testWidgets('检查中提示圈与文本居中对齐', (tester) async {
+    final context = await host(tester);
+    final response = Completer<ReleaseInfo>();
+    final service = FakeUpdateService()..fetch = () => response.future;
+    var finished = false;
+    final checking = checkUpdateManually(
+      context,
+      service: service,
+    ).whenComplete(() => finished = true);
+    await tester.pump(const Duration(milliseconds: 100));
+    final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    final padding = dialog.contentPadding as EdgeInsets;
+    expect(padding.top, padding.bottom);
+    final row = tester.widget<Row>(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(Row),
+      ),
+    );
+    expect(row.mainAxisAlignment, MainAxisAlignment.center);
+    expect(row.crossAxisAlignment, CrossAxisAlignment.center);
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.byType(Expanded),
+      ),
+      findsNothing,
+    );
+    response.complete(release);
+    await pumpUntil(tester, () => finished);
+    await checking;
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
   group('检查失败提示', () {
     DioException httpError(
       int code, {

@@ -103,12 +103,18 @@ Future<void> _checkUpdateManually(
   }
   final loading = _UpdateProgressRoute(
     context,
+    // 默认 contentPadding 上 20 下 24 非对称 + Row 左对齐 + Expanded 撑满，
+    // 圈与文本看起来偏上偏左：改对称内边距，内容整体居中（Expanded 会
+    // 吃掉居中所需空隙，短文本直接用 Text）。
     (_) => const AlertDialog(
+      contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       content: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           CircularProgressIndicator(),
           SizedBox(width: 16),
-          Expanded(child: Text('正在检查更新…')),
+          Text('正在检查更新…'),
         ],
       ),
     ),
