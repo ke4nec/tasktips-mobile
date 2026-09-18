@@ -179,8 +179,8 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
     final m = widget.model;
     final t = await m.createTodo(dueDate: _tab == 0 ? m.today : null);
     if (!mounted) return;
-    Navigator.of(this.context)
-        .push(MaterialPageRoute(builder: (_) => DetailPage(model: m, todoId: t.id)));
+    Navigator.of(this.context).push(MaterialPageRoute(
+        builder: (_) => DetailPage(model: m, todoId: t.id, isNew: true)));
   }
 }
 
@@ -227,7 +227,8 @@ void openSyncPage(BuildContext context, AppModel model) =>
 void openTrashPage(BuildContext context, AppModel model) =>
     openSecondaryPage(context, TrashPage(model: model));
 
-void openDetailPage(BuildContext context, AppModel model, String todoId) {
-  Navigator.of(context)
-      .push(MaterialPageRoute(builder: (_) => DetailPage(model: model, todoId: todoId)));
+void openDetailPage(BuildContext context, AppModel model, String todoId,
+    {bool isNew = false}) {
+  Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => DetailPage(model: model, todoId: todoId, isNew: isNew)));
 }

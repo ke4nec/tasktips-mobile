@@ -57,8 +57,23 @@ class TodoTile extends StatelessWidget {
     final title = todo.title.isEmpty ? '未命名 Todo' : todo.title;
     final excerpt = _excerpt(todo.body);
     // 设计稿 .task：panel 底、line 边框、圆角 16、内边距 4，
-    // 三列 48 | 自适应 | 48
-    return Container(
+    // 三列 48 | 自适应 | 48；左滑删除（移入回收站，二次确认，动画结束再落盘）
+    return Dismissible(
+      key: ValueKey(todo.id),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) => _confirmTrash(context, title),
+      onDismissed: (_) => model.trashTodo(todo.id),
+      background: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        decoration: BoxDecoration(
+          color: a.dangerContainer,
+          borderRadius: BorderRadius.circular(16),
+        ),
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 24),
+        child: Icon(Icons.delete_outline, color: a.danger),
+      ),
+      child: Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
@@ -185,8 +200,18 @@ class TodoTile extends StatelessWidget {
             ),
           ),
         ],
+        ),
       ),
     );
+  }
+
+  /// 左滑删除二次确认：与“更多操作”菜单的移入回收站同文案。
+  Future<bool> _confirmTrash(BuildContext context, String title) async {
+    final ok = await confirmDialog(context,
+        title: '移入回收站',
+        message: '“$title”将移入回收站，30 天后自动删除。',
+        confirmText: '移入回收站');
+    return ok;
   }
 
   /// 单卡“更多操作”底部面板：标记完成 / 移入回收站。

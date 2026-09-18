@@ -644,7 +644,7 @@ class CategoryTodoList extends StatelessWidget {
         onPressed: () async {
           final t = await model.createTodo(
               categoryId: category?.id,);
-          if (context.mounted) openDetailPage(context, model, t.id);
+          if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
         },
         child: const Icon(Icons.add),
       ),
@@ -685,7 +685,7 @@ class TagTodoList extends StatelessWidget {
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           final t = await model.createTodo(tagName: tag.name);
-          if (context.mounted) openDetailPage(context, model, t.id);
+          if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
         },
         child: const Icon(Icons.add),
       ),

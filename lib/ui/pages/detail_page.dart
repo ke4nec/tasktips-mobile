@@ -20,7 +20,12 @@ import 'history_page.dart';
 class DetailPage extends StatefulWidget {
   final AppModel model;
   final String todoId;
-  const DetailPage({super.key, required this.model, required this.todoId});
+
+  /// 是否刚从新建入口进入：正文始终无实质内容就返回时直接丢弃，
+  /// 不留空记录（是否“有内容”只看编辑后的正文文本）。
+  final bool isNew;
+  const DetailPage(
+      {super.key, required this.model, required this.todoId, this.isNew = false});
 
   @override
   State<DetailPage> createState() => _DetailPageState();
@@ -40,6 +45,8 @@ class _DetailPageState extends State<DetailPage> {
   bool _imeComposing = false; // 输入法组合期：不落盘、不派生标题
   // 正在把远端/外部写入同步进输入框：此时 text 变更不算本地编辑
   bool _applyingExternal = false;
+  // 打开时正文快照：新建入口进来时为空，用于返回时判定是否“写过内容”
+  late final String _initialBody;
   int _cbCounter = 0;
   // 待保存的最新快照（比已提交保存更新的内容在此排队）
   Todo? _pendingSnapshot;
@@ -52,6 +59,7 @@ class _DetailPageState extends State<DetailPage> {
   void initState() {
     super.initState();
     _bodyCtrl.text = m.byId(_id)?.body ?? '';
+    _initialBody = _bodyCtrl.text;
     _bodyCtrl.addListener(_onBodyChanged);
     // 完成按钮、元数据写入与后台同步 pull 都会 notifyListeners：
     // 监听 model 使页面随外部写入刷新（设计 §2 统一写入契约的 UI 面）
@@ -210,6 +218,17 @@ class _DetailPageState extends State<DetailPage> {
         }
         return false;
       }
+      return true;
+    }
+    // 新建进来且正文始终无实质内容：直接丢弃，不留空记录。
+    // 用 purge（墓碑先落盘）：创建后若已同步到远端/他端，墓碑保证收敛删除。
+    if (widget.isNew &&
+        _initialBody.trim().isEmpty &&
+        _bodyCtrl.text.trim().isEmpty) {
+      _closing = true;
+      _debounce?.cancel();
+      // 不 await：路由先退出（避免“Todo 不存在”闪屏），删除随后完成并广播刷新列表
+      unawaited(m.purgeTodo(_id));
       return true;
     }
     _closing = true;
