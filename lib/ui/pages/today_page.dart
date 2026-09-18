@@ -7,7 +7,7 @@ import '../app.dart';
 import '../theme.dart';
 import '../widgets.dart';
 
-class TodayPage extends StatelessWidget {
+class TodayPage extends StatefulWidget {
   final AppModel model;
 
   /// 所属 Tab 是否激活：离场时不再随 model 高频通知全量重建
@@ -16,10 +16,27 @@ class TodayPage extends StatelessWidget {
   const TodayPage({super.key, required this.model, this.active = true});
 
   @override
+  State<TodayPage> createState() => _TodayPageState();
+}
+
+class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
+  @override
+  AppModel get selectionModel => widget.model;
+  AppModel get model => widget.model;
+
+  // ---------- 长按多选（状态与批量删除见 TodoSelectionMixin） ----------
+
+  Widget _tile(Todo t) => selectableTile(
+        context,
+        todo: t,
+        onOpen: () => openDetailPage(context, model, t.id),
+      );
+
+  @override
   Widget build(BuildContext context) {
     return ActiveModelBuilder(
       model: model,
-      active: active,
+      active: widget.active,
       builder: (context) {
         final open = model.query(TodoQuery(view: TodoView.today));
         final overdue =
@@ -102,6 +119,8 @@ class TodayPage extends StatelessWidget {
               const SizedBox(width: 8),
             ],
           ),
+          bottomNavigationBar:
+              selecting ? selectionBar([...overdue, ...dueToday]) : null,
           body: CustomScrollView(
             slivers: [
               SliverPadding(
@@ -227,11 +246,7 @@ class TodayPage extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         sliver: SliverList.builder(
           itemCount: items.length,
-          itemBuilder: (context, i) => TodoTile(
-            model: model,
-            todo: items[i],
-            onOpen: () => openDetailPage(context, model, items[i].id),
-          ),
+          itemBuilder: (context, i) => _tile(items[i]),
         ),
       ),
     ];
@@ -239,20 +254,30 @@ class TodayPage extends StatelessWidget {
 }
 
 /// 今日“即将到期”跳转列表（返回时保持今日页状态由 IndexedStack 保证）。
-class _FilteredListView extends StatelessWidget {
+class _FilteredListView extends StatefulWidget {
   final AppModel model;
   final TodoView view;
   const _FilteredListView({required this.model, required this.view});
 
   @override
+  State<_FilteredListView> createState() => _FilteredListViewState();
+}
+
+class _FilteredListViewState extends State<_FilteredListView>
+    with TodoSelectionMixin {
+  @override
+  AppModel get selectionModel => widget.model;
+  AppModel get model => widget.model;
+
+  @override
   Widget build(BuildContext context) {
-    return SecondaryScaffold(
-      title: view == TodoView.upcoming ? '即将到期' : '列表',
-      body: AnimatedBuilder(
-        animation: model,
-        builder: (context, _) {
-          final list = model.query(TodoQuery(view: view));
-          return list.isEmpty
+    return AnimatedBuilder(
+      animation: model,
+      builder: (context, _) {
+        final list = model.query(TodoQuery(view: widget.view));
+        return SecondaryScaffold(
+          title: widget.view == TodoView.upcoming ? '即将到期' : '列表',
+          body: list.isEmpty
               ? const EmptyState(
                   icon: Icons.event_available, title: '暂无即将到期任务')
               : ListView.builder(
@@ -260,16 +285,17 @@ class _FilteredListView extends StatelessWidget {
                   itemCount: list.length,
                   itemBuilder: (context, i) {
                     final t = list[i];
-                    return TodoTile(
-                      model: model,
+                    return selectableTile(
+                      context,
                       todo: t,
                       showCategory: true,
                       onOpen: () => openDetailPage(context, model, t.id),
                     );
                   },
-                );
-        },
-      ),
+                ),
+          bottomBar: selecting ? selectionBar(list) : null,
+        );
+      },
     );
   }
 }

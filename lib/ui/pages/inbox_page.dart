@@ -22,7 +22,10 @@ class InboxPage extends StatefulWidget {
 }
 
 class _InboxPageState extends State<InboxPage>
-    with AutomaticKeepAliveClientMixin {
+    with AutomaticKeepAliveClientMixin, TodoSelectionMixin {
+  @override
+  AppModel get selectionModel => widget.model;
+
   final _searchCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
   final _searchFocus = FocusNode();
@@ -52,6 +55,17 @@ class _InboxPageState extends State<InboxPage>
     _scrollCtrl.dispose();
     super.dispose();
   }
+
+  // ---------- 长按多选（状态与批量删除见 TodoSelectionMixin） ----------
+
+  Widget _tile(Todo t) => selectableTile(
+        context,
+        // 拖拽排序分支要求条目带 key；普通列表带 key 无影响
+        key: ValueKey(t.id),
+        todo: t,
+        showCategory: true,
+        onOpen: () => openDetailPage(context, widget.model, t.id),
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -142,10 +156,12 @@ class _InboxPageState extends State<InboxPage>
           final highPriority =
               list.any((t) => t.priority == 3) ? ' · 高优先级' : '';
           // 自定义顺序拖拽：仅默认排序 + Inbox/All 视图 + 无搜索筛选时启用
-          //（桌面设计语义；筛选/显式排序态禁用，避免整组覆盖丢失旧顺序）
+          //（桌面设计语义；筛选/显式排序态禁用，避免整组覆盖丢失旧顺序）。
+          // 多选模式下禁用拖拽：长按手势归选中，避免与拖拽打架。
           final reorderable = _q.defaultSort &&
               (_q.view == TodoView.inbox || _q.view == TodoView.all) &&
-              !_q.hasActiveFilter;
+              !_q.hasActiveFilter &&
+              !selecting;
           final reorderHint = reorderable ? ' · 长按拖动排序' : '';
           return Column(
             children: [
@@ -173,33 +189,22 @@ class _InboxPageState extends State<InboxPage>
                         // elevation 6 阴影动画——长列表拖拽时每帧重绘阴影
                         // 是掉帧主因之一
                         proxyDecorator: _dragProxy,
-                        itemBuilder: (context, i) => TodoTile(
-                          key: ValueKey(list[i].id),
-                          model: widget.model,
-                          todo: list[i],
-                          showCategory: true,
-                          onOpen: () =>
-                              openDetailPage(context, widget.model, list[i].id),
-                        ),
+                        itemBuilder: (context, i) => _tile(list[i]),
                       )
                     : ListView.builder(
                         key: const PageStorageKey('inbox-list'),
                         controller: _scrollCtrl,
                         padding: const EdgeInsets.only(top: 4),
                         itemCount: list.length,
-                        itemBuilder: (context, i) => TodoTile(
-                          model: widget.model,
-                          todo: list[i],
-                          showCategory: true,
-                          onOpen: () =>
-                              openDetailPage(context, widget.model, list[i].id),
-                        ),
+                        itemBuilder: (context, i) => _tile(list[i]),
                       ),
               ),
             ],
           );
         },
       ),
+      bottomNavigationBar:
+          selecting ? selectionBar(widget.model.query(_q)) : null,
     );
   }
 

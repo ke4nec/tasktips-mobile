@@ -316,7 +316,7 @@ void main() {
     });
   }
 
-  testWidgets('检查中提示圈与文本居中对齐', (tester) async {
+  testWidgets('检查中提示圈靠左与文本横排', (tester) async {
     final context = await host(tester);
     final response = Completer<ReleaseInfo>();
     final service = FakeUpdateService()..fetch = () => response.future;
@@ -335,7 +335,7 @@ void main() {
         matching: find.byType(Row),
       ),
     );
-    expect(row.mainAxisAlignment, MainAxisAlignment.center);
+    expect(row.mainAxisAlignment, MainAxisAlignment.start);
     expect(row.crossAxisAlignment, CrossAxisAlignment.center);
     expect(
       find.descendant(
@@ -419,8 +419,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('404 与超时文案区分', (tester) async {
-      await runFailingCheck(tester, httpError(404));
+    testWidgets('404 与超时文案区分', (tester) async {      await runFailingCheck(tester, httpError(404));
       expect(find.textContaining('未找到更新信息'), findsOneWidget);
 
       await runFailingCheck(
@@ -433,5 +432,18 @@ void main() {
       expect(find.textContaining('超时'), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
+  });
+
+  testWidgets('更新确认框显示应用名与版本号', (tester) async {
+    final context = await host(tester);
+    final shown = showUpdateDialog(context, current: '0.0.4', release: release);
+    await tester.pumpAndSettle();
+    expect(find.text('发现 TaskTips 新版本 0.0.5'), findsOneWidget);
+    expect(find.textContaining('当前 TaskTips 版本 0.0.4'), findsOneWidget);
+    await tester.tap(find.text('稍后再说'));
+    await shown;
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 }

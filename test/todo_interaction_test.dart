@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:tasktips/app/app_model.dart';
 import 'package:tasktips/infra/store.dart';
 import 'package:tasktips/ui/pages/detail_page.dart';
+import 'package:tasktips/ui/pages/inbox_page.dart';
 import 'package:tasktips/ui/widgets.dart';
 
 Future<(Directory, AppModel)> _boot() async {
@@ -56,7 +57,7 @@ void main() {
 
     await tester.runAsync(() async {
       await tester.fling(
-          find.byKey(ValueKey(id)), const Offset(-400, 0), 1000);
+          find.byKey(ValueKey('dismiss-$id')), const Offset(-400, 0), 1000);
       await tester.pumpAndSettle();
     });
     expect(find.text('“买牛奶”将移入回收站，30 天后自动删除。'), findsOneWidget);
@@ -95,7 +96,7 @@ void main() {
 
     await tester.runAsync(() async {
       await tester.fling(
-          find.byKey(ValueKey(id)), const Offset(-400, 0), 1000);
+          find.byKey(ValueKey('dismiss-$id')), const Offset(-400, 0), 1000);
       await tester.pumpAndSettle();
       await tester.tap(find.text('取消'));
       await tester.pumpAndSettle();
@@ -189,5 +190,98 @@ void main() {
       await tester.pumpAndSettle();
     });
     expect(model.byId(id), isNotNull);
+  });
+
+  testWidgets('长按多选并批量移入回收站', (tester) async {
+    late Directory dir;
+    late AppModel model;
+    late String id1;
+    late String id2;
+    await tester.runAsync(() async {
+      final r = await _boot();
+      dir = r.$1;
+      model = r.$2;
+      final a = await model.createTodo();
+      await model.writeTodo(a.copyWith(body: '买牛奶'));
+      final b = await model.createTodo();
+      await model.writeTodo(b.copyWith(body: '买面包'));
+      id1 = a.id;
+      id2 = b.id;
+    });
+    addTearDown(() => dir.delete(recursive: true));
+
+    await tester.pumpWidget(MaterialApp(home: InboxPage(model: model)));
+    await tester.pumpAndSettle();
+    // 搜索态关闭拖拽，长按进入多选（手势时钟走 fake async，不进 runAsync）
+    await tester.enterText(find.byType(SearchBar), '买');
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(find.byType(ReorderableListView), findsNothing);
+    expect(find.text('买牛奶'), findsOneWidget);
+    expect(find.text('买面包'), findsOneWidget);
+
+    await tester.longPress(find.byKey(ValueKey(id1)));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+
+    // 多选模式点按切换选中（不再打开详情）
+    await tester.tap(find.text('买面包'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, '全选'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 2 项'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, '删除'));
+    await tester.pumpAndSettle();
+    expect(find.text('将 2 项移入回收站，30 天后自动删除。'), findsOneWidget);
+    // 确认后的批量落盘走真实 IO，进 runAsync
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, '移入回收站'));
+      await tester.pumpAndSettle();
+      for (var i = 0;
+          i < 50 &&
+              (!model.byId(id1)!.isDeleted || !model.byId(id2)!.isDeleted);
+          i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      await tester.pumpAndSettle();
+    });
+    expect(model.trashedTodos.length, 2);
+    expect(find.text('已将 2 项移入回收站'), findsOneWidget);
+    expect(find.textContaining('已选'), findsNothing);
+  });
+
+  testWidgets('拖拽排序列表经菜单进入多选', (tester) async {
+    late Directory dir;
+    late AppModel model;
+    await tester.runAsync(() async {
+      final r = await _boot();
+      dir = r.$1;
+      model = r.$2;
+      final t = await model.createTodo();
+      await model.writeTodo(t.copyWith(body: '开会'));
+    });
+    addTearDown(() => dir.delete(recursive: true));
+
+    await tester.pumpWidget(MaterialApp(home: InboxPage(model: model)));
+    await tester.pumpAndSettle();
+    // 默认视图为拖拽排序：长按被拖拽占用，走菜单进入多选
+    expect(find.byType(ReorderableListView), findsOneWidget);
+
+    await tester.tap(find.byTooltip('更多操作：开会'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('多选'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+    // 多选模式下拖拽关闭
+    expect(find.byType(ReorderableListView), findsNothing);
+
+    await tester.tap(find.widgetWithText(TextButton, '取消'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已选'), findsNothing);
+    expect(find.byType(ReorderableListView), findsOneWidget);
   });
 }

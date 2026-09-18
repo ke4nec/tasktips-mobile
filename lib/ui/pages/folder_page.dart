@@ -607,88 +607,112 @@ Color _parseHex(String hex) {
 }
 
 /// 目录筛选 Todo 列表（含子目录）；FAB 新建继承目录。
-class CategoryTodoList extends StatelessWidget {
+class CategoryTodoList extends StatefulWidget {
   final AppModel model;
   final Category? category;
   const CategoryTodoList({super.key, required this.model, required this.category});
 
   @override
+  State<CategoryTodoList> createState() => _CategoryTodoListState();
+}
+
+class _CategoryTodoListState extends State<CategoryTodoList>
+    with TodoSelectionMixin {
+  @override
+  AppModel get selectionModel => widget.model;
+
+  @override
   Widget build(BuildContext context) {
+    final category = widget.category;
+    final model = widget.model;
     final ids = category == null
         ? null
-        : model.expandCategoryIds(category!.id);
-    return SecondaryScaffold(
-      title: category?.name ?? '未分类',
-      body: AnimatedBuilder(
-        animation: model,
-        builder: (context, _) {
-          final list = model.query(TodoQuery(
-            view: TodoView.all,
-            categoryIds: ids?.toList(),
-            uncategorized: category == null,
-          )).where((t) => !t.isDeleted).toList();
-          return list.isEmpty
+        : model.expandCategoryIds(category.id);
+    return AnimatedBuilder(
+      animation: model,
+      builder: (context, _) {
+        final list = model.query(TodoQuery(
+          view: TodoView.all,
+          categoryIds: ids?.toList(),
+          uncategorized: category == null,
+        )).where((t) => !t.isDeleted).toList();
+        return SecondaryScaffold(
+          title: category?.name ?? '未分类',
+          body: list.isEmpty
               ? const EmptyState(icon: Icons.folder_off, title: '此分类下暂无任务')
               : ListView.builder(
                   itemCount: list.length,
-                  itemBuilder: (context, i) => TodoTile(
-                    model: model,
+                  itemBuilder: (context, i) => selectableTile(
+                    context,
                     todo: list[i],
-                    onOpen: () => openDetailPage(context, model, list[i].id),
+                    onOpen: () =>
+                        openDetailPage(context, model, list[i].id),
                   ),
-                );
-        },
-      ),
-      // 从分类列表新建继承当前目录（未分类视图则不带目录）
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final t = await model.createTodo(
-              categoryId: category?.id,);
-          if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
-        },
-        child: const Icon(Icons.add),
-      ),
+                ),
+          bottomBar: selecting ? selectionBar(list) : null,
+          // 从分类列表新建继承当前目录（未分类视图则不带目录）
+          floatingActionButton: FloatingActionButton(
+            onPressed: () async {
+              final t = await model.createTodo(
+                  categoryId: category?.id,);
+              if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
+            },
+            child: const Icon(Icons.add),
+          ),
+        );
+      },
     );
   }
 }
 
 /// 标签筛选 Todo 列表；FAB 新建继承标签。
-class TagTodoList extends StatelessWidget {
+class TagTodoList extends StatefulWidget {
   final AppModel model;
   final Tag tag;
   const TagTodoList({super.key, required this.model, required this.tag});
 
   @override
+  State<TagTodoList> createState() => _TagTodoListState();
+}
+
+class _TagTodoListState extends State<TagTodoList> with TodoSelectionMixin {
+  @override
+  AppModel get selectionModel => widget.model;
+
+  @override
   Widget build(BuildContext context) {
-    return SecondaryScaffold(
-      title: '#${tag.name}',
-      body: AnimatedBuilder(
-        animation: model,
-        builder: (context, _) {
-          final list = model.query(TodoQuery(
-            view: TodoView.all,
-            tagNames: [tag.name],
-          ));
-          return list.isEmpty
+    final model = widget.model;
+    final tag = widget.tag;
+    return AnimatedBuilder(
+      animation: model,
+      builder: (context, _) {
+        final list = model.query(TodoQuery(
+          view: TodoView.all,
+          tagNames: [tag.name],
+        ));
+        return SecondaryScaffold(
+          title: '#${tag.name}',
+          body: list.isEmpty
               ? const EmptyState(icon: Icons.tag, title: '此标签下暂无任务')
               : ListView.builder(
                   itemCount: list.length,
-                  itemBuilder: (context, i) => TodoTile(
-                    model: model,
+                  itemBuilder: (context, i) => selectableTile(
+                    context,
                     todo: list[i],
-                    onOpen: () => openDetailPage(context, model, list[i].id),
+                    onOpen: () =>
+                        openDetailPage(context, model, list[i].id),
                   ),
-                );
-        },
-      ),
-      // 从标签列表新建继承当前标签
-      floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          final t = await model.createTodo(tagName: tag.name);
-          if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
-        },
-        child: const Icon(Icons.add),
-      ),
+                ),
+          bottomBar: selecting ? selectionBar(list) : null,
+          floatingActionButton: FloatingActionButton(
+            onPressed: () async {
+              final t = await model.createTodo(tagName: tag.name);
+              if (context.mounted) openDetailPage(context, model, t.id, isNew: true);
+            },
+            child: const Icon(Icons.add),
+          ),
+        );
+      },
     );
   }
 }

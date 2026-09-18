@@ -29,6 +29,9 @@ class UpdateService {
   static const apkAssetName = 'app-arm64-v8a-release.apk';
   static const shaAssetName = 'SHA256SUMS.txt';
 
+  /// 展示用应用名：更新弹层/提示只报版本号意图不明，统一带应用名。
+  static const appName = 'TaskTips';
+
   /// PackageInfo 不可用时（单测/异常）的回退版本。
   /// 与 pubspec.yaml versionName 保持一致，改版本时同步改这里。
   static const fallbackVersion = '0.0.10';

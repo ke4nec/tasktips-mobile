@@ -103,13 +103,11 @@ Future<void> _checkUpdateManually(
   }
   final loading = _UpdateProgressRoute(
     context,
-    // 默认 contentPadding 上 20 下 24 非对称 + Row 左对齐 + Expanded 撑满，
-    // 圈与文本看起来偏上偏左：改对称内边距，内容整体居中（Expanded 会
-    // 吃掉居中所需空隙，短文本直接用 Text）。
+    // 检查中：进度圈靠左 + 文本，左对齐（默认 Row 即左起，不居中）。
     (_) => const AlertDialog(
       contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 24),
       content: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           CircularProgressIndicator(),
@@ -151,7 +149,7 @@ Future<void> _checkUpdateManually(
   if (!service.shouldUpdate(current, release)) {
     _showTip(
       context,
-      SnackBar(content: Text('已是最新版本（$current）')),
+      SnackBar(content: Text('${UpdateService.appName}已是最新版本（$current）')),
     );
     return;
   }
@@ -173,14 +171,14 @@ Future<void> showUpdateDialog(
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
-      title: Text('发现新版本 ${release.version}'),
+      title: Text('发现 ${UpdateService.appName} 新版本 ${release.version}'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '当前版本 $current${_sizeSuffix(release.apkSize)}',
+              '当前 ${UpdateService.appName} 版本 $current${_sizeSuffix(release.apkSize)}',
               style: const TextStyle(fontSize: 13),
             ),
             if (release.sha256 == null)
@@ -290,7 +288,7 @@ Future<void> _startUpdate(
   progressRoute = _UpdateProgressRoute(
     context,
     (ctx) => AlertDialog(
-      title: Text('正在下载 ${release.version}'),
+      title: Text('正在下载 ${UpdateService.appName} ${release.version}'),
       content: ValueListenableBuilder<double>(
         valueListenable: progress,
         builder: (_, v, _) => Column(

@@ -42,12 +42,25 @@ class TodoTile extends StatelessWidget {
   final VoidCallback onOpen;
   final bool showCategory;
 
+  /// 多选模式：点按切换选中（不再打开详情/勾选完成），左滑删除禁用。
+  final bool selectionMode;
+  final bool selected;
+  final VoidCallback? onToggleSelect;
+
+  /// 长按进入多选。拖拽排序列表里长按被拖拽占用，
+  /// 那里走“更多操作”菜单的“多选”进入（onEnterSelect 同一回调）。
+  final VoidCallback? onEnterSelect;
+
   const TodoTile({
     super.key,
     required this.model,
     required this.todo,
     required this.onOpen,
     this.showCategory = false,
+    this.selectionMode = false,
+    this.selected = false,
+    this.onToggleSelect,
+    this.onEnterSelect,
   });
 
   @override
@@ -56,12 +69,18 @@ class TodoTile extends StatelessWidget {
     final overdue = todo.isOverdue;
     final title = todo.title.isEmpty ? '未命名 Todo' : todo.title;
     final excerpt = _excerpt(todo.body);
+    final selecting = selectionMode && selected;
+    // 多选模式下勾选框即选中框（选中态与完成态同一样式）
+    final checkedBox = selectionMode ? selected : todo.isCompleted;
     // 设计稿 .task：panel 底、line 边框、圆角 16、内边距 4，
     // 三列 48 | 自适应 | 48；左滑删除（移入回收站，二次确认，动画结束再落盘）
     return Dismissible(
-      key: ValueKey(todo.id),
+      // 与条目 key 区分：拖拽分支外层 TodoTile 另带 ValueKey(id)
+      key: ValueKey('dismiss-${todo.id}'),
       direction: DismissDirection.endToStart,
-      confirmDismiss: (_) => _confirmTrash(context, title),
+      // 多选模式下左滑弹回：点按切换选中才是唯一手势
+      confirmDismiss:
+          selectionMode ? (_) async => false : (_) => _confirmTrash(context, title),
       onDismissed: (_) => model.trashTodo(todo.id),
       background: Container(
         margin: const EdgeInsets.only(bottom: 8),
@@ -77,21 +96,25 @@ class TodoTile extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: a.panel,
-        border: Border.all(color: a.line),
+        color: selecting ? a.brandContainer : a.panel,
+        border: Border.all(color: selecting ? a.brand : a.line),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 完成勾选（48×48，圆角 12）
+          // 完成勾选（48×48，圆角 12）；多选模式下变选中框
           Semantics(
-            label: todo.isCompleted ? '取消完成：$title' : '完成：$title',
+            label: selectionMode
+                ? (selected ? '取消选中：$title' : '选中：$title')
+                : (todo.isCompleted ? '取消完成：$title' : '完成：$title'),
             button: true,
-            checked: todo.isCompleted,
+            checked: checkedBox,
             child: InkWell(
               borderRadius: BorderRadius.circular(12),
-              onTap: () => model.setCompleted(todo.id, !todo.isCompleted),
+              onTap: selectionMode
+                  ? onToggleSelect
+                  : () => model.setCompleted(todo.id, !todo.isCompleted),
               child: SizedBox(
                 width: 48,
                 height: 48,
@@ -102,12 +125,12 @@ class TodoTile extends StatelessWidget {
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: todo.isCompleted ? a.brandInk : a.muted,
+                        color: checkedBox ? a.brandInk : a.muted,
                         width: 1.5,
                       ),
-                      color: todo.isCompleted ? a.brandContainer : null,
+                      color: checkedBox ? a.brandContainer : null,
                     ),
-                    child: todo.isCompleted
+                    child: checkedBox
                         ? Icon(Icons.check, size: 17, color: a.brandInk)
                         : null,
                   ),
@@ -115,10 +138,11 @@ class TodoTile extends StatelessWidget {
               ),
             ),
           ),
-          // 主体：标题 + 摘要 1 行 + meta
+          // 主体：标题 + 摘要 1 行 + meta；多选模式点按切换选中，长按进入多选
           Expanded(
             child: InkWell(
-              onTap: onOpen,
+              onTap: selectionMode ? onToggleSelect : onOpen,
+              onLongPress: selectionMode ? null : onEnterSelect,
               borderRadius: BorderRadius.circular(8),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 9),
@@ -214,7 +238,7 @@ class TodoTile extends StatelessWidget {
     return ok;
   }
 
-  /// 单卡“更多操作”底部面板：标记完成 / 移入回收站。
+  /// 单卡“更多操作”底部面板：标记完成 / 多选 / 移入回收站。
   Future<void> _showTodoMenu(
       BuildContext context, AppColors a, String title) async {
     final action = await showSheetOptions<String>(
@@ -225,6 +249,7 @@ class TodoTile extends StatelessWidget {
             todo.isCompleted ? '取消完成' : '标记完成',
             todo.isCompleted ? Icons.task_alt_outlined : Icons.check,
             'toggle'),
+        const SheetOption('多选', Icons.select_all, 'select'),
         SheetOption('移入回收站', Icons.delete_outline, 'trash'),
       ],
     );
@@ -232,6 +257,8 @@ class TodoTile extends StatelessWidget {
     switch (action) {
       case 'toggle':
         await model.setCompleted(todo.id, !todo.isCompleted);
+      case 'select':
+        onEnterSelect?.call();
       case 'trash':
         if (!context.mounted) return;
         final ok = await confirmDialog(context,
@@ -415,6 +442,139 @@ class EmptyState extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 列表多选操作条：放列表页底部（bottomNavigationBar/bottomBar 槽），
+/// 已选计数 + 全选 + 删除 + 取消。批量删除的二次确认由调用页负责。
+class SelectionBar extends StatelessWidget {
+  final int count;
+  final VoidCallback onSelectAll;
+  final VoidCallback onDelete;
+  final VoidCallback onCancel;
+
+  const SelectionBar({
+    super.key,
+    required this.count,
+    required this.onSelectAll,
+    required this.onDelete,
+    required this.onCancel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final a = appColors(context, Theme.of(context).brightness);
+    Widget btn(String label, VoidCallback onTap, {Color? color}) => TextButton(
+          style: TextButton.styleFrom(
+            minimumSize: const Size(64, 48),
+            foregroundColor: color,
+          ),
+          onPressed: onTap,
+          child: Text(label),
+        );
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: a.panel,
+          border: Border(top: BorderSide(color: a.line)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: Row(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text('已选 $count 项',
+                  style: TextStyle(fontSize: 14, color: a.text)),
+            ),
+            const Spacer(),
+            btn('全选', onSelectAll),
+            btn('删除', onDelete, color: a.danger),
+            btn('取消', onCancel),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 列表页长按多选通用状态（今日/列表/分类/标签四处列表共用）：
+/// 长按条目或“更多操作”菜单进入多选，点按切换，全选/删除/取消走底部
+/// [SelectionBar]。批量删除二次确认后逐条 trashTodo，完事清选择。
+mixin TodoSelectionMixin<T extends StatefulWidget> on State<T> {
+  /// 所在页的 model（经 widget 持有）。
+  AppModel get selectionModel;
+
+  final Set<String> selectedIds = {};
+  bool get selecting => selectedIds.isNotEmpty;
+
+  void enterSelect(String id) {
+    if (mounted) setState(() => selectedIds.add(id));
+  }
+
+  void toggleSelect(String id) {
+    if (!mounted) return;
+    setState(() {
+      if (!selectedIds.remove(id)) selectedIds.add(id);
+    });
+  }
+
+  void selectAllVisible(List<Todo> items) {
+    if (mounted) setState(() => selectedIds.addAll(items.map((t) => t.id)));
+  }
+
+  void cancelSelect() {
+    if (mounted) setState(selectedIds.clear);
+  }
+
+  Future<void> deleteSelected() async {
+    final n = selectedIds.length;
+    if (n == 0) return;
+    final ok = await confirmDialog(context,
+        title: '移入回收站',
+        message: '将 $n 项移入回收站，30 天后自动删除。',
+        confirmText: '移入回收站');
+    if (!ok || !mounted) return;
+    final ids = selectedIds.toList();
+    setState(selectedIds.clear);
+    for (final id in ids) {
+      await selectionModel.trashTodo(id);
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已将 $n 项移入回收站')));
+    }
+  }
+
+  /// 当前可见列表的多选操作条；非多选时返回 null，直接喂 bottomBar 槽。
+  SelectionBar? selectionBar(List<Todo> visible) => selecting
+      ? SelectionBar(
+          count: selectedIds.length,
+          onSelectAll: () => selectAllVisible(visible),
+          onDelete: deleteSelected,
+          onCancel: cancelSelect,
+        )
+      : null;
+
+  /// 按本页多选态装配 TodoTile（调用页只传各自的展示参数与打开回调）。
+  /// [key] 供拖拽排序分支（要求条目带 key），普通列表可不传。
+  Widget selectableTile(
+    BuildContext context, {
+    Key? key,
+    required Todo todo,
+    bool showCategory = false,
+    required VoidCallback onOpen,
+  }) =>
+      TodoTile(
+        key: key,
+        model: selectionModel,
+        todo: todo,
+        showCategory: showCategory,
+        selectionMode: selecting,
+        selected: selectedIds.contains(todo.id),
+        onToggleSelect: () => toggleSelect(todo.id),
+        onEnterSelect: () => enterSelect(todo.id),
+        onOpen: onOpen,
+      );
 }
 
 /// 确认弹层：设计稿全 app 统一为底部 sheet（danger 用 danger-container 底）。
