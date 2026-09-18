@@ -49,7 +49,7 @@
 ## CI
 - 本地模拟：`act push -j check`（nektos/act + catthehacker/ubuntu:act-latest 镜像）已验证通过；build 作业含 Android SDK 缺失时自助安装步骤，但本机透明代理环境下 Java sdkmanager 拉取清单会失败（curl 正常），完整 build 需在 GitHub runner 或直连网络验证。
 
-- `.github/workflows/android-build.yml`：仅 `v*` 标签推送触发完整流水线（2026-09-17 起，PR/普通 push 不再触发）：check（`flutter analyze` + `flutter test`）→ build（arm64-v8a release APK，build-name 取标签去 v 前缀）→ 发布到 GitHub Release → cleanup 删除制品（保留 1 天兜底）。pub/Gradle 缓存按锁文件键恢复。工作流显式声明最小 `permissions`（顶层 contents:read、build 作业 contents:write 供 gh release、cleanup 作业 actions:write 供删制品）——仓库默认 GITHUB_TOKEN 只读，缺声明时删制品/发 Release 会 403（2026-09-17 修复，脚本同时改为逐条删除+汇总报错，不再单条失败即静默中断）。
+- `.github/workflows/android-build.yml`：仅 `v*` 标签推送触发完整流水线（2026-09-17 起，PR/普通 push 不再触发）：check（`flutter analyze` + `flutter test`）→ build（arm64-v8a release APK，build-name 取标签去 v 前缀）→ 发布到 GitHub Release（正文为 CI 按上一 tag..本次 tag 的提交自动生成的中文更新日志：feat/fix/perf 分组，过滤 chore(release) 等内部提交，App 更新弹层直接展示该正文；重跑时同步改写正文）→ cleanup 删除制品（保留 1 天兜底）。pub/Gradle 缓存按锁文件键恢复。工作流显式声明最小 `permissions`（顶层 contents:read、build 作业 contents:write 供 gh release、cleanup 作业 actions:write 供删制品）——仓库默认 GITHUB_TOKEN 只读，缺声明时删制品/发 Release 会 403（2026-09-17 修复，脚本同时改为逐条删除+汇总报错，不再单条失败即静默中断）。
 - 正式签名（2026-09-18 起）：release APK 用固定 keystore 签名（`android/release.keystore`，PKCS12 / alias `tasktips` / RSA 2048，证书 SHA-256 `C0:8D:B3:0E:2C:99:E7:FA:2B:C1:00:F2:E0:BA:EB:13:63:5A:A6:FC:19:3C:A2:04:14:CF:BE:96:F2:16:9F:2B`）。本地构建读 `android/keystore.properties`（不入库，见 `keystore.properties.example`）；CI 由 Secrets `KEYSTORE_BASE64` + `KEYSTORE_PASSWORD` 构建前解码生成，Secrets 缺失直接失败、绝不静默回退 debug 签名（历史上 debug 回退导致每次 CI 构建签名不同、覆盖安装被拒，v0.0.4 起根治）。keystore 备份与再生成流程见 `docs/release-signing.md`。
 
 ## Workflow
