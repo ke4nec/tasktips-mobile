@@ -66,11 +66,7 @@ class SettingsPage extends StatelessWidget {
             _CheckUpdateRow(),
             _section(context, '关于'),
             const _AboutRow(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-              child: Text('本地优先，随时记下要做的事。',
-                  style: TextStyle(fontSize: 12, color: a.muted)),
-            ),
+            const SizedBox(height: 24),
           ],
         ),
       ),
@@ -380,7 +376,8 @@ class _CheckUpdateRowState extends State<_CheckUpdateRow> {
   }
 }
 
-/// “关于”行：版本同样取运行时值（自更新后常数会滞后），
+/// “关于”行：版本号只在弹层内展示，行副标题不再重复版本号
+///（“检查更新”行已显示当前版本）。
 /// 点击弹层展示完整关于信息。
 class _AboutRow extends StatefulWidget {
   const _AboutRow();
@@ -402,7 +399,8 @@ class _AboutRowState extends State<_AboutRow> {
         return ListTile(
           leading: const Icon(Icons.info_outline),
           title: const Text('关于 TaskTips', style: TextStyle(fontSize: 16)),
-          subtitle: Text('版本 $v', style: const TextStyle(fontSize: 14)),
+          subtitle:
+              const Text('查看版本与应用信息', style: TextStyle(fontSize: 14)),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => showAboutSheet(context, v),
         );
