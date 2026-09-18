@@ -36,6 +36,9 @@ class AppModel extends ChangeNotifier {
 
   ThemeModeSetting themeMode = ThemeModeSetting.system;
   bool onboardingDone = false;
+  /// 启动时自动检查 GitHub 新版本（设置页可关；关闭后仅手动检查）。
+  /// 历史版本无此键时默认开启。
+  bool autoUpdateCheck = true;
   DateTime _lastTodayRefresh = DateTime.now();
   String _today = '';
 
@@ -107,6 +110,10 @@ class AppModel extends ChangeNotifier {
     themeMode = ThemeModeSetting.values
         .firstWhere((m) => m.name == s['theme'], orElse: () => ThemeModeSetting.system);
     onboardingDone = s['onboardingDone'] == true;
+    // settings.json is local state and may have been edited or partially
+    // corrupted; a malformed value must not prevent the app from starting.
+    final autoUpdate = s['autoUpdateCheck'];
+    autoUpdateCheck = autoUpdate is bool ? autoUpdate : true;
     _today = todayLocal();
     await purgeExpiredTrash();
     // 同步哈希缓存按版本失效：重载（备份恢复等）后内容可能已变，
@@ -133,6 +140,7 @@ class AppModel extends ChangeNotifier {
         'schemaVersion': 1,
         'theme': themeMode.name,
         'onboardingDone': onboardingDone,
+        'autoUpdateCheck': autoUpdateCheck,
       });
 
   Future<void> setThemeMode(ThemeModeSetting m) async {
@@ -145,6 +153,13 @@ class AppModel extends ChangeNotifier {
     onboardingDone = true;
     notifyListeners();
     await _saveSettings();
+  }
+
+  Future<void> setAutoUpdateCheck(bool v) async {
+    if (autoUpdateCheck == v) return;
+    autoUpdateCheck = v;
+    await _saveSettings();
+    notifyListeners();
   }
 
   // ---------- Todo 用例 ----------

@@ -12,6 +12,7 @@ import 'pages/sync_page.dart';
 import 'pages/today_page.dart';
 import 'pages/trash_page.dart';
 import 'theme.dart';
+import 'update_flow.dart' show maybePromptUpdateAtStartup;
 
 /// 全局导航键：分享入口等服务级跳转使用。
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -105,6 +106,12 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
         _knownToday = t;
         widget.model.refreshToday();
       }
+    });
+    // 启动后台检查 GitHub 新版本：首帧后执行，不阻塞呈现；
+    // 开关关闭/已是最新/网络失败均静默，仅有新版时弹确认框。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      maybePromptUpdateAtStartup(context, widget.model);
     });
   }
 

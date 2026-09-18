@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../../app/app_model.dart';
+import '../../app/update_service.dart';
 import '../../infra/backup.dart';
 import '../app.dart';
 import '../theme.dart';
+import '../update_flow.dart' show checkUpdateManually;
 import '../widgets.dart' show ActiveModelBuilder, confirmDialog;
 
 /// 设置页（设计稿 settingsPage）：外观 / 数据 / 关于 三组 setting-row，
@@ -19,8 +21,8 @@ class SettingsPage extends StatelessWidget {
   final bool active;
   const SettingsPage({super.key, required this.model, this.active = true});
 
-  // 与 pubspec.yaml versionName 保持一致
-  static const appVersion = '0.0.4';
+  // 与 pubspec.yaml versionName 保持一致（UpdateService 单源回退值）。
+  static const appVersion = UpdateService.fallbackVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -51,9 +53,19 @@ class SettingsPage extends StatelessWidget {
                   () => _showCorrupt(context)),
             _navRow(context, '本地存储', '内容保存在应用专属空间',
                 Icons.folder_outlined, () => _showStorage(context)),
+            _section(context, '应用更新'),
+            SwitchListTile(
+              secondary: const Icon(Icons.system_update_outlined),
+              title: const Text('启动时自动检查更新', style: TextStyle(fontSize: 16)),
+              subtitle: Text(
+                  model.autoUpdateCheck ? '每次启动自动检查 GitHub 新版本' : '已关闭，仅手动检查',
+                  style: const TextStyle(fontSize: 14)),
+              value: model.autoUpdateCheck,
+              onChanged: (v) => model.setAutoUpdateCheck(v),
+            ),
+            _CheckUpdateRow(),
             _section(context, '关于'),
-            _navRow(context, '关于 TaskTips', '版本 $appVersion',
-                Icons.info_outline, () => _showAbout(context)),
+            const _AboutRow(),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
               child: Text('本地优先，随时记下要做的事。',
@@ -222,7 +234,9 @@ class SettingsPage extends StatelessWidget {
     // 临时包：state/ 已排除系统云备份，导出后即删
     final tmp = File(p.join(model.store.stateDir.path, 'backup-export.tmp.zip'));
     try {
-      await exportBackup(model.store, tmp.path, appVersion: appVersion);
+      // 备份 manifest 记运行时版本（自更新后常数会滞后），取不到再回退。
+      final v = await const UpdateService().currentVersion();
+      await exportBackup(model.store, tmp.path, appVersion: v);
       final uri = await FilePicker.saveFile(
         dialogTitle: '导出备份',
         fileName: name,
@@ -283,43 +297,6 @@ class SettingsPage extends StatelessWidget {
     }
   }
 
-  Future<void> _showAbout(BuildContext context) async {
-
-    final a = appColors(context, Theme.of(context).brightness);
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: a.panel,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('关于 TaskTips',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500)),
-              const SizedBox(height: 8),
-              Text('本地优先的轻量 Todo 工具\n版本 $appVersion',
-                  style: TextStyle(fontSize: 14, height: 1.6, color: a.muted)),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.tonal(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('知道了'),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 损坏内容只读提示（设计 §4.1：保留原件并提示更新或恢复，不静默丢弃）。
   Future<void> _showCorrupt(BuildContext context) async {
     final a = appColors(context, Theme.of(context).brightness);
     final lines = <String>[
@@ -369,4 +346,103 @@ class SettingsPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// “检查更新”行：副标题显示本机已装版本（PackageInfo 运行时值），
+/// 点击走手动检查流程（加载框→最新提示/失败提示/新版确认框）。
+class _CheckUpdateRow extends StatefulWidget {
+  const _CheckUpdateRow();
+
+  @override
+  State<_CheckUpdateRow> createState() => _CheckUpdateRowState();
+}
+
+class _CheckUpdateRowState extends State<_CheckUpdateRow> {
+  late final Future<String> _version =
+      const UpdateService().currentVersion();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: _version,
+      builder: (context, snap) {
+        final v = snap.data ?? SettingsPage.appVersion;
+        return ListTile(
+          leading: const Icon(Icons.update_outlined),
+          title: const Text('检查更新', style: TextStyle(fontSize: 16)),
+          subtitle: Text('当前版本 $v · 点击手动检查',
+              style: const TextStyle(fontSize: 14)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => checkUpdateManually(context),
+        );
+      },
+    );
+  }
+}
+
+/// “关于”行：版本同样取运行时值（自更新后常数会滞后），
+/// 点击弹层展示完整关于信息。
+class _AboutRow extends StatefulWidget {
+  const _AboutRow();
+
+  @override
+  State<_AboutRow> createState() => _AboutRowState();
+}
+
+class _AboutRowState extends State<_AboutRow> {
+  late final Future<String> _version =
+      const UpdateService().currentVersion();
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: _version,
+      builder: (context, snap) {
+        final v = snap.data ?? SettingsPage.appVersion;
+        return ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: const Text('关于 TaskTips', style: TextStyle(fontSize: 16)),
+          subtitle: Text('版本 $v', style: const TextStyle(fontSize: 14)),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => showAboutSheet(context, v),
+        );
+      },
+    );
+  }
+}
+
+/// 关于弹层（顶层函数，供 _AboutRow 调用）。
+Future<void> showAboutSheet(BuildContext context, String version) async {
+  final a = appColors(context, Theme.of(context).brightness);
+  await showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: a.panel,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('关于 TaskTips',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w500)),
+            const SizedBox(height: 8),
+            Text('本地优先的轻量 Todo 工具\n版本 $version',
+                style: TextStyle(fontSize: 14, height: 1.6, color: a.muted)),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.tonal(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('知道了'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }

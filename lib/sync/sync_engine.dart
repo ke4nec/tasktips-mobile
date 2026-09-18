@@ -13,6 +13,7 @@ import 'package:one_of/one_of.dart';
 import 'package:tasktips_api/tasktips_api.dart' as api;
 
 import '../app/app_model.dart';
+import '../app/update_service.dart';
 import '../domain/classification.dart' show rfc3339Utc;
 import '../domain/todo.dart';
 import '../infra/backup.dart';
@@ -216,12 +217,14 @@ class SyncEngine extends ChangeNotifier {
   }
 
   Future<void> registerDevice() async {
+    // 运行时版本优先（自更新后常数会滞后）：后台 isolate 等取不到时回退常数。
+    final v = await const UpdateService().currentVersion();
     await _devicesApi.registerDevice(
         registerDeviceRequest: api.RegisterDeviceRequest((b) {
       b.deviceId = model.deviceId;
       b.displayName = 'Android ${model.deviceId.substring(0, 8)}';
       b.platform = 'android';
-      b.appVersion = '0.0.4';
+      b.appVersion = v;
     }));
   }
 
