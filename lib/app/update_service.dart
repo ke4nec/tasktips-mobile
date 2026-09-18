@@ -34,7 +34,7 @@ class UpdateService {
 
   /// PackageInfo 不可用时（单测/异常）的回退版本。
   /// 与 pubspec.yaml versionName 保持一致，改版本时同步改这里。
-  static const fallbackVersion = '0.0.11';
+  static const fallbackVersion = '0.1.0';
 
   const UpdateService();
 
