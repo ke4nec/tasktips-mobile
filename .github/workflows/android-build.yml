@@ -68,6 +68,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 正式签名：从 Secrets 解码 keystore 并写出 keystore.properties
+      # （格式见 android/keystore.properties.example）。Secrets 缺失直接失败，
+      # 不静默回退 debug 签名——否则每次构建签名不同，已装用户升级会被拒。
+      - name: 配置正式签名密钥
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::缺少签名 Secrets（KEYSTORE_BASE64 / KEYSTORE_PASSWORD），拒绝以 debug 签名发布" >&2
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > android/release.keystore
+          {
+            echo "storeFile=../release.keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=tasktips"
+            echo "keyPassword=$KEYSTORE_PASSWORD"
+          } > android/keystore.properties
+          echo "已配置正式签名（android/release.keystore）"
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
