@@ -135,7 +135,7 @@
 - 自动同步默认在首次连接确认后开启；关闭后取消自动触发和后台周期任务，本地变更继续保留为待同步，手动同步仍可用。取消任务不能回滚已被服务端接受的对象。
 - 后台使用 WorkManager，默认申请 15 分钟周期；界面说明由系统调度，不承诺准点执行。[Android 后台调度说明](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work)
 - 退出登录保留本地内容；密码不落盘，刷新凭据放入系统安全存储。
-- 正式连接要求 HTTPS，校验证书且不接受含凭据、查询或片段的服务端地址。HTTP 开发例外仅进入调试配置。access token 只放内存；日志同时排除完整请求/响应正文和签名 URL。
+- 服务端地址支持 HTTP/HTTPS，不接受含凭据、查询或片段的地址。access token 只放内存；日志同时排除完整请求/响应正文和签名 URL。
 - 退出登录或更换连接时停止旧任务并使旧连接的异步回调失效，旧响应不能写入新连接状态。离线退出立即清除本机凭据，并明确远端会话尚未确认撤销。
 - 设备身份、刷新凭据、同步基线、未完成请求和本机操作记录排除系统云备份与设备迁移；新安装生成新设备身份并重新登录、bootstrap，不能克隆旧设备的提交上下文。Android 的云备份与设备迁移需分别配置规则。[Android 备份规则](https://developer.android.com/identity/data/autobackup)
 - 设备列表展示真实设备数量、名称、平台和最近活动时间，以“一部 Android＋两台桌面设备”验证互通，不限制只能三台。

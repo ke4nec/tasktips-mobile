@@ -48,13 +48,13 @@ class SyncSession {
   }
 }
 
-/// 服务端地址校验：正式连接要求 HTTPS，拒绝含凭据、查询或片段的地址。
+/// 服务端地址校验：支持 HTTP/HTTPS，拒绝含凭据、查询或片段的地址。
 String? validateServerUrl(String raw) {
   final s = raw.trim();
   if (s.isEmpty) return '请输入服务端地址';
   final uri = Uri.tryParse(s);
   if (uri == null || !uri.hasScheme || uri.host.isEmpty) return '地址格式不正确';
-  if (uri.scheme != 'https') return '正式连接要求 HTTPS 地址';
+  if (uri.scheme != 'https' && uri.scheme != 'http') return '仅支持 HTTP/HTTPS 地址';
   if (uri.userInfo.isNotEmpty) return '地址不能包含凭据';
   if (uri.hasQuery || uri.hasFragment) return '地址不能包含查询或片段';
   return null;

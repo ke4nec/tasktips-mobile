@@ -5,12 +5,13 @@ import 'package:tasktips/sync/sync_state.dart';
 
 void main() {
   group('服务端地址校验', () {
-    test('HTTPS 合法', () {
+    test('HTTP/HTTPS 合法', () {
       expect(validateServerUrl('https://sync.example.com'), isNull);
       expect(validateServerUrl('https://sync.example.com:8443'), isNull);
+      expect(validateServerUrl('http://192.168.1.2:8080'), isNull);
     });
-    test('拒绝 HTTP、凭据、查询与片段', () {
-      expect(validateServerUrl('http://sync.example.com'), isNotNull);
+    test('拒绝非 HTTP(S)、凭据、查询与片段', () {
+      expect(validateServerUrl('ftp://sync.example.com'), isNotNull);
       expect(validateServerUrl('https://u:p@sync.example.com'), isNotNull);
       expect(validateServerUrl('https://sync.example.com?x=1'), isNotNull);
       expect(validateServerUrl('https://sync.example.com#f'), isNotNull);

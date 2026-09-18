@@ -122,7 +122,7 @@ class _SyncPageState extends State<SyncPage> {
         TextField(
           controller: _serverCtrl,
           decoration: const InputDecoration(
-              labelText: '服务端地址（HTTPS）', hintText: 'https://sync.example.com'),
+              labelText: '服务端地址', hintText: 'https://sync.example.com'),
           keyboardType: TextInputType.url,
           autocorrect: false,
         ),
