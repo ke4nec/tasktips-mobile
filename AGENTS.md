@@ -1,6 +1,7 @@
 # TaskTips Mobile — Agent Guide
 
 ## Status
+- 更新流程与多选完善批次（2026-09-18，`flutter analyze` 0 issue、`flutter test` 168 通过、debug APK 构建通过）：更新包只保留最新一份（下载验签后清 `cache/update` 下历史残留）；`SelectionBar` 全选↔全不选切换（全不选不清退出，退出走取消）；检查更新三弹层（检查中/更新确认/下载进度）与安装权限提示统一改底部 sheet（与“关于”同一样式：panel 底/顶部圆角 28/22 号标题/48dp 按钮，进度类经 `ModalBottomSheetRoute` 禁手势关闭）。
 - 多选与更新文案批次（2026-09-18，`flutter analyze` 0 issue、`flutter test` 168 通过、debug APK 构建通过）：Todo 长按多选+批量删除（`TodoSelectionMixin` 今日/列表/分类/标签四页共用：长按/`···`菜单进入、点按切换、`SelectionBar` 全选/删除/取消，批量删除二次确认后逐条 trash+提示条；多选时禁用左滑与 inbox 拖拽，拖拽列表长按被占用故只走菜单进入）；检查更新加载框进度圈改左对齐；更新确认/下载中/`已是最新`提示统一带应用名（`UpdateService.appName`）。测试见 test/todo_interaction_test.dart、test/update_flow_test.dart（“更新确认框显示应用名与版本号”）。
 - 列表交互批次（2026-09-18，`flutter analyze` 0 issue、`flutter test` 165 通过、debug APK 构建通过）：新建空内容返回丢弃（DetailPage `isNew` 标记 + 进出正文快照比对，只看编辑后正文文本；丢弃走 purge 写墓碑，已同步副本可收敛；路由先退后删防“不存在”闪屏；三个 FAB 新建入口传参，分享预填入口不传）；TodoTile 左滑删除（Dismissible endToStart + 与菜单同文案二次确认，确认后滑出动画结束才 trashTodo 落盘；与 inbox 长按拖拽排序共存）。测试见 test/todo_interaction_test.dart。
 - 自更新审查修复（2026-09-18）：启动/手动检查单飞，加载框按自身 route 关闭；取消/页面销毁后禁止安装并清理临时包，进度监听器待弹层销毁后释放；已声明的 SHA 文件拉取失败或无有效摘要拒绝更新（历史未提供文件的 Release 仍保留提示兼容）；未知来源设置返回后重查权限并继续更新；损坏的自动更新设置键回退默认值；FileProvider 仅开放 cache/update。交互回归见 test/update_flow_test.dart。

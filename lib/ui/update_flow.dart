@@ -17,6 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../app/app_model.dart';
 import '../app/update_installer.dart';
 import '../app/update_service.dart';
+import 'theme.dart';
 
 /// 进程内仅做一次启动检查（避免前台恢复/Tab 切换重复弹）。
 bool _startupChecked = false;
@@ -26,13 +27,28 @@ bool _downloadActive = false;
 /// Keep the route identity: shares and other asynchronous flows may push a
 /// different route while the request is running.
 class _UpdateProgressRoute {
-  final DialogRoute<void> route;
+  final ModalBottomSheetRoute<void> route;
 
-  _UpdateProgressRoute(BuildContext context, WidgetBuilder builder)
-    : route = DialogRoute<void>(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => PopScope(canPop: false, child: builder(context)),
+  _UpdateProgressRoute(BuildContext context, Widget content)
+    : route = ModalBottomSheetRoute<void>(
+        builder: (_) => PopScope(
+          canPop: false,
+          // 与“关于”弹层同一样式：panel 底、顶部圆角 28、安全区内边距
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+              child: content,
+            ),
+          ),
+        ),
+        backgroundColor:
+            appColors(context, Theme.of(context).brightness).panel,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        isScrollControlled: false,
+        isDismissible: false,
+        enableDrag: false,
       ) {
     unawaited(Navigator.of(context, rootNavigator: true).push(route));
   }
@@ -42,6 +58,65 @@ class _UpdateProgressRoute {
     await route.completed;
   }
 }
+
+/// 更新流程确认类弹层：底部 sheet（与“关于”弹层同一样式），
+/// 不再用居中 AlertDialog。按钮按确认弹层规范 48dp 高。
+Future<T?> _showUpdateSheet<T>(
+  BuildContext context, {
+  required String title,
+  required Widget content,
+  required List<Widget> Function(BuildContext ctx) actions,
+}) {
+  final a = appColors(context, Theme.of(context).brightness);
+  return showModalBottomSheet<T>(
+    context: context,
+    backgroundColor: a.panel,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    ),
+    builder: (ctx) {
+      final btns = actions(ctx);
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title,
+                  style: const TextStyle(
+                      fontSize: 22, fontWeight: FontWeight.w500)),
+              const SizedBox(height: 8),
+              content,
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  for (var i = 0; i < btns.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    btns[i],
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+Widget _sheetTextBtn(String label, VoidCallback onTap) => TextButton(
+      style: TextButton.styleFrom(minimumSize: const Size(72, 48)),
+      onPressed: onTap,
+      child: Text(label),
+    );
+
+Widget _sheetFilledBtn(String label, VoidCallback onTap) => FilledButton(
+      style: FilledButton.styleFrom(minimumSize: const Size(72, 48)),
+      onPressed: onTap,
+      child: Text(label),
+    );
 
 /// 启动后台检查：开关关闭/非 Android/已是最新/网络失败 → 静默返回；
 /// 仅“有新版”时弹确认框。
@@ -103,18 +178,15 @@ Future<void> _checkUpdateManually(
   }
   final loading = _UpdateProgressRoute(
     context,
-    // 检查中：进度圈靠左 + 文本，左对齐（默认 Row 即左起，不居中）。
-    (_) => const AlertDialog(
-      contentPadding: EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-      content: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          CircularProgressIndicator(),
-          SizedBox(width: 16),
-          Text('正在检查更新…'),
-        ],
-      ),
+    // 检查中：进度圈靠左 + 文本，左对齐。
+    const Row(
+      mainAxisAlignment: MainAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        CircularProgressIndicator(),
+        SizedBox(width: 16),
+        Text('正在检查更新…'),
+      ],
     ),
   );
   ReleaseInfo? release;
@@ -168,50 +240,42 @@ Future<void> showUpdateDialog(
   required ReleaseInfo release,
   UpdateService service = const UpdateService(),
 }) async {
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: Text('发现 ${UpdateService.appName} 新版本 ${release.version}'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '当前 ${UpdateService.appName} 版本 $current${_sizeSuffix(release.apkSize)}',
-              style: const TextStyle(fontSize: 13),
+  final ok = await _showUpdateSheet<bool>(
+    context,
+    title: '发现 ${UpdateService.appName} 新版本 ${release.version}',
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '当前 ${UpdateService.appName} 版本 $current${_sizeSuffix(release.apkSize)}',
+            style: const TextStyle(fontSize: 13),
+          ),
+          if (release.sha256 == null)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text(
+                '该版本未提供校验文件，安装前请确认下载来源为本仓库 Release。',
+                style: TextStyle(fontSize: 12),
+              ),
             ),
-            if (release.sha256 == null)
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text(
-                  '该版本未提供校验文件，安装前请确认下载来源为本仓库 Release。',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
-            if (release.body.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Text(
-                release.body.trim(),
-                style: const TextStyle(fontSize: 13, height: 1.5),
-              ),
-            ],
+          if (release.body.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text('更新内容', style: TextStyle(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              release.body.trim(),
+              style: const TextStyle(fontSize: 13, height: 1.5),
+            ),
           ],
-        ),
+        ],
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(ctx, false),
-          child: const Text('稍后再说'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(ctx, true),
-          child: const Text('立即更新'),
-        ),
-      ],
     ),
+    actions: (ctx) => [
+      _sheetTextBtn('稍后再说', () => Navigator.pop(ctx, false)),
+      _sheetFilledBtn('立即更新', () => Navigator.pop(ctx, true)),
+    ],
   );
   if (ok != true || !context.mounted) return;
   await startUpdate(context, release, service: service);
@@ -243,22 +307,14 @@ Future<void> _startUpdate(
   try {
     if (!await installer.canInstall()) {
       if (!context.mounted) return;
-      final go = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('需要安装权限'),
-          content: const Text('Android 要求先允许“安装未知应用”，才能安装下载的新版本。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('去设置'),
-            ),
-          ],
-        ),
+      final go = await _showUpdateSheet<bool>(
+        context,
+        title: '需要安装权限',
+        content: const Text('Android 要求先允许“安装未知应用”，才能安装下载的新版本。'),
+        actions: (ctx) => [
+          _sheetTextBtn('取消', () => Navigator.pop(ctx, false)),
+          _sheetFilledBtn('去设置', () => Navigator.pop(ctx, true)),
+        ],
       );
       if (go == true) {
         try {
@@ -287,26 +343,33 @@ Future<void> _startUpdate(
   late final _UpdateProgressRoute progressRoute;
   progressRoute = _UpdateProgressRoute(
     context,
-    (ctx) => AlertDialog(
-      title: Text('正在下载 ${UpdateService.appName} ${release.version}'),
-      content: ValueListenableBuilder<double>(
-        valueListenable: progress,
-        builder: (_, v, _) => Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            LinearProgressIndicator(value: v <= 0 ? null : v),
-            const SizedBox(height: 8),
-            Text(v <= 0 ? '准备中…' : '${(v * 100).toStringAsFixed(0)}%'),
-          ],
+    Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('正在下载 ${UpdateService.appName} ${release.version}',
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w500)),
+        const SizedBox(height: 8),
+        ValueListenableBuilder<double>(
+          valueListenable: progress,
+          builder: (_, v, _) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              LinearProgressIndicator(value: v <= 0 ? null : v),
+              const SizedBox(height: 8),
+              Text(v <= 0 ? '准备中…' : '${(v * 100).toStringAsFixed(0)}%'),
+            ],
+          ),
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            cancel.cancel('用户取消');
-            unawaited(progressRoute.close());
-          },
-          child: const Text('取消'),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            _sheetTextBtn('取消', () {
+              cancel.cancel('用户取消');
+              unawaited(progressRoute.close());
+            }),
+          ],
         ),
       ],
     ),
@@ -342,6 +405,12 @@ Future<void> _startUpdate(
         throw const FormatException('安装包校验失败（SHA-256 不一致）');
       }
     }
+    // 包已验明：只保留最新一份，清掉历史残留（上次成功安装留下的包等）
+    try {
+      await for (final e in outDir.list()) {
+        if (e.path != downloadDir.path) await e.delete(recursive: true);
+      }
+    } catch (_) {}
     await progressRoute.close();
     if (cancel.isCancelled || !context.mounted) return;
     try {

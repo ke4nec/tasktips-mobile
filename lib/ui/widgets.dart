@@ -445,17 +445,23 @@ class EmptyState extends StatelessWidget {
 }
 
 /// 列表多选操作条：放列表页底部（bottomNavigationBar/bottomBar 槽），
-/// 已选计数 + 全选 + 删除 + 取消。批量删除的二次确认由调用页负责。
+/// 已选计数 + 全选/全不选 + 删除 + 取消。批量删除的二次确认由调用页负责。
 class SelectionBar extends StatelessWidget {
   final int count;
-  final VoidCallback onSelectAll;
+
+  /// 当前可见条目是否已全选：是则按钮显示“全不选”（点按清空但不退出多选）。
+  final bool allSelected;
+  final VoidCallback onToggleSelectAll;
   final VoidCallback onDelete;
+
+  /// 退出多选模式。
   final VoidCallback onCancel;
 
   const SelectionBar({
     super.key,
     required this.count,
-    required this.onSelectAll,
+    required this.allSelected,
+    required this.onToggleSelectAll,
     required this.onDelete,
     required this.onCancel,
   });
@@ -487,7 +493,7 @@ class SelectionBar extends StatelessWidget {
                   style: TextStyle(fontSize: 14, color: a.text)),
             ),
             const Spacer(),
-            btn('全选', onSelectAll),
+            btn(allSelected ? '全不选' : '全选', onToggleSelectAll),
             btn('删除', onDelete, color: a.danger),
             btn('取消', onCancel),
           ],
@@ -518,8 +524,17 @@ mixin TodoSelectionMixin<T extends StatefulWidget> on State<T> {
     });
   }
 
-  void selectAllVisible(List<Todo> items) {
-    if (mounted) setState(() => selectedIds.addAll(items.map((t) => t.id)));
+  /// 全选↔全不选切换：全不选只清空选择、不退出多选（退出走取消）。
+  void toggleSelectAllVisible(List<Todo> items) {
+    if (!mounted) return;
+    setState(() {
+      if (items.isNotEmpty &&
+          items.every((t) => selectedIds.contains(t.id))) {
+        selectedIds.removeAll(items.map((t) => t.id));
+      } else {
+        selectedIds.addAll(items.map((t) => t.id));
+      }
+    });
   }
 
   void cancelSelect() {
@@ -549,7 +564,9 @@ mixin TodoSelectionMixin<T extends StatefulWidget> on State<T> {
   SelectionBar? selectionBar(List<Todo> visible) => selecting
       ? SelectionBar(
           count: selectedIds.length,
-          onSelectAll: () => selectAllVisible(visible),
+          allSelected: visible.isNotEmpty &&
+              visible.every((t) => selectedIds.contains(t.id)),
+          onToggleSelectAll: () => toggleSelectAllVisible(visible),
           onDelete: deleteSelected,
           onCancel: cancelSelect,
         )

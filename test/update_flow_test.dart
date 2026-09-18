@@ -138,7 +138,7 @@ void main() {
     expect(find.text('Shared note'), findsOneWidget);
     Navigator.of(context).pop();
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
     expect(find.text('Settings'), findsOneWidget);
   });
 
@@ -153,7 +153,7 @@ void main() {
     ).whenComplete(() => finished = true);
     await pumpUntil(tester, () => finished);
     await checking;
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
     expect(find.text('Settings'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -188,7 +188,7 @@ void main() {
       );
       await checking;
       await tester.pumpAndSettle();
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
       model.dispose();
     },
   );
@@ -221,7 +221,7 @@ void main() {
     await updating;
     expect(installer.installed, isNull);
     expect(File(downloaded!).existsSync(), isFalse);
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -262,7 +262,7 @@ void main() {
       await updating;
       expect(installer.installed, isNull);
       expect(File(downloaded!).existsSync(), isFalse);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
       expect(find.text('Settings'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
@@ -311,7 +311,7 @@ void main() {
       await updating;
       expect(installer.installed, allow ? isNotNull : isNull);
       if (allow) expect(File(installer.installed!).existsSync(), isTrue);
-      expect(find.byType(AlertDialog), findsNothing);
+      expect(find.byType(BottomSheet), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }
@@ -326,12 +326,10 @@ void main() {
       service: service,
     ).whenComplete(() => finished = true);
     await tester.pump(const Duration(milliseconds: 100));
-    final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
-    final padding = dialog.contentPadding as EdgeInsets;
-    expect(padding.top, padding.bottom);
+    expect(find.byType(BottomSheet), findsOneWidget);
     final row = tester.widget<Row>(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(BottomSheet),
         matching: find.byType(Row),
       ),
     );
@@ -339,7 +337,7 @@ void main() {
     expect(row.crossAxisAlignment, CrossAxisAlignment.center);
     expect(
       find.descendant(
-        of: find.byType(AlertDialog),
+        of: find.byType(BottomSheet),
         matching: find.byType(Expanded),
       ),
       findsNothing,
@@ -443,7 +441,7 @@ void main() {
     await tester.tap(find.text('稍后再说'));
     await shown;
     await tester.pumpAndSettle();
-    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
     expect(tester.takeException(), isNull);
   });
 }

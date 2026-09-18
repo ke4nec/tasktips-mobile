@@ -229,6 +229,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('已选 2 项'), findsOneWidget);
 
+    // 已全选时按钮变“全不选”：点按清空但不退出多选
+    expect(find.widgetWithText(TextButton, '全不选'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '全不选'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('已选'), findsNothing);
+
+    // 重新进入：部分选中时按钮为“全选”
+    await tester.longPress(find.byKey(ValueKey(id1)));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '全选'));
     await tester.pumpAndSettle();
     expect(find.text('已选 2 项'), findsOneWidget);
