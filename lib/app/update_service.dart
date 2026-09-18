@@ -15,6 +15,12 @@ class UpdateService {
   static const apiLatestUrl =
       'https://api.github.com/repos/$repoOwner/$repoName/releases/latest';
 
+  /// API 限流时的回退入口：`releases/latest` 页面会 302 跳到
+  /// `releases/tag/<tag>`，tag 即版本号；不走 api.github.com，不消耗
+  /// API 配额（未认证每小时 60 次，代理共用时极易耗尽）。
+  static const webLatestUrl =
+      'https://github.com/$repoOwner/$repoName/releases/latest';
+
   /// 兜底下载页（检查失败/安装失败时浏览器打开手动下载）。
   static const releasesPageUrl =
       'https://github.com/$repoOwner/$repoName/releases';
@@ -41,6 +47,11 @@ class UpdateService {
   }
 
   /// 拉取最新 Release 并（若存在校验文件）解析出 APK 的 SHA-256。
+  ///
+  /// 主路径走 GitHub API；仅当 API 明确限流（403 + 限流特征）时回退到
+  /// Release 页面（302 跳转取 tag + 固定名拼下载地址 + 同样验 SHA）。
+  /// 回退页本身不可用时抛原始限流错（提示口径不变）；SHA 校验类失败
+  /// 原样抛出（疑似篡改/损坏，必须明示并拒绝更新）。
   Future<ReleaseInfo> fetchLatest({Dio? dio}) async {
     final client =
         dio ??
@@ -56,24 +67,121 @@ class UpdateService {
           ),
         );
     try {
-      final resp = await client.get<Map<String, dynamic>>(apiLatestUrl);
-      final data = resp.data;
-      if (data == null) throw const FormatException('更新响应为空');
-      final release = parseRelease(data);
-      if (release.shaUrl != null) {
-        final shaResp = await client.get<String>(
-          release.shaUrl!,
-          options: Options(responseType: ResponseType.plain),
-        );
-        final text = shaResp.data ?? '';
-        final sum = parseSha256(text, release.apkFileName);
-        if (sum == null) throw const FormatException('校验文件缺少有效的 APK SHA-256');
-        return release.copyWith(sha256: sum);
+      try {
+        return await _fetchViaApi(client);
+      } on DioException catch (e) {
+        if (e.response?.statusCode != 403 || !isRateLimited(e)) rethrow;
+        try {
+          return await _fetchViaWeb(client);
+        } on _WebFallbackUnavailable {
+          throw e;
+        }
       }
-      return release;
     } finally {
       if (dio == null) client.close();
     }
+  }
+
+  Future<ReleaseInfo> _fetchViaApi(Dio client) async {
+    final resp = await client.get<Map<String, dynamic>>(apiLatestUrl);
+    final data = resp.data;
+    if (data == null) throw const FormatException('更新响应为空');
+    final release = parseRelease(data);
+    if (release.shaUrl != null) {
+      final shaResp = await client.get<String>(
+        release.shaUrl!,
+        options: Options(responseType: ResponseType.plain),
+      );
+      final text = shaResp.data ?? '';
+      final sum = parseSha256(text, release.apkFileName);
+      if (sum == null) throw const FormatException('校验文件缺少有效的 APK SHA-256');
+      return release.copyWith(sha256: sum);
+    }
+    return release;
+  }
+
+  /// 页面回退：禁用自动跳转，从 302 Location 提取 tag；APK/SHA 地址按
+  /// CI 固定名构造（`releases/download/<tag>/…` 为稳定链接，无需解析 HTML）。
+  /// SHA 拉取成功必须含有效摘要；404 视为历史无校验版本降级（调用方提示
+  /// 确认来源）；其他失败拒绝本次更新。
+  Future<ReleaseInfo> _fetchViaWeb(Dio client) async {
+    late final Response<String> resp;
+    try {
+      resp = await client.get<String>(
+        webLatestUrl,
+        options: Options(
+          responseType: ResponseType.plain,
+          followRedirects: false,
+          validateStatus: (s) => s != null && s >= 200 && s < 400,
+        ),
+      );
+    } on DioException {
+      throw const _WebFallbackUnavailable();
+    }
+    final tag = tagFromLatestLocation(
+      resp.requestOptions.uri,
+      resp.headers.value('location') ?? '',
+    );
+    if (tag.isEmpty) throw const _WebFallbackUnavailable();
+    final base =
+        'https://github.com/$repoOwner/$repoName/releases/download/$tag';
+    String? sha256;
+    String? shaUrl;
+    try {
+      final shaResp = await client.get<String>(
+        '$base/$shaAssetName',
+        options: Options(responseType: ResponseType.plain),
+      );
+      final sum = parseSha256(shaResp.data ?? '', apkAssetName);
+      if (sum == null) throw const FormatException('校验文件缺少有效的 APK SHA-256');
+      sha256 = sum;
+      shaUrl = '$base/$shaAssetName';
+    } on DioException catch (e) {
+      // 404 = 该版本未附校验文件：按历史兼容降级，安装前提示确认来源。
+      if (e.response?.statusCode != 404) rethrow;
+    }
+    return ReleaseInfo(
+      version: normalizeVersion(tag),
+      tagName: tag,
+      name: tag,
+      body: '',
+      htmlUrl: 'https://github.com/$repoOwner/$repoName/releases/tag/$tag',
+      apkUrl: '$base/$apkAssetName',
+      apkFileName: apkAssetName,
+      apkSize: null,
+      shaUrl: shaUrl,
+      sha256: sha256,
+      publishedAt: '',
+    );
+  }
+
+  /// GitHub 限流启发式：`x-ratelimit-remaining: 0` 或服务端 message 含
+  /// rate limit 字样即判定为限流（未认证 403 常用此形态）。
+  /// UI 层限流文案与此处共用判定，口径保持一致。
+  static bool isRateLimited(DioException e) {
+    final remaining = e.response?.headers.value('x-ratelimit-remaining');
+    if (remaining == '0') return true;
+    final data = e.response?.data;
+    final text = data is Map
+        ? '${data['message']}'
+        : data is String
+            ? data
+            : '';
+    return RegExp(r'rate.?limit', caseSensitive: false).hasMatch(text);
+  }
+
+  /// 从 `/releases/latest` 跳转 Location 提取 tag（兼容绝对/相对地址）。
+  /// 非 `…/releases/tag/<tag>` 形态返回空串（调用方拒绝本次更新）。
+  static String tagFromLatestLocation(Uri requestUri, String location) {
+    if (location.isEmpty) return '';
+    final uri = Uri.tryParse(location);
+    if (uri == null) return '';
+    final resolved = uri.hasScheme ? uri : requestUri.resolveUri(uri);
+    final seg = resolved.pathSegments;
+    for (var i = 0; i + 2 < seg.length; i++) {
+      if (seg[i] == 'releases' && seg[i + 1] == 'tag') return seg[i + 2];
+    }
+    return '';
   }
 
   /// 是否有新版可升（latest > current）。
@@ -259,6 +367,12 @@ class UpdateService {
     final digest = await sha256.bind(stream).first;
     return digest.toString();
   }
+}
+
+/// 页面回退不可用（跳转页拉取失败/无有效 tag 跳转）：调用方据此抛原始
+/// API 限流错。SHA 校验类失败不用它（须原样暴露并拒绝更新）。
+class _WebFallbackUnavailable implements Exception {
+  const _WebFallbackUnavailable();
 }
 
 /// GitHub 最新 Release（`releases/latest` + 可选校验文件解析结果）。

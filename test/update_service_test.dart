@@ -150,7 +150,8 @@ void main() {
       ],
     };
 
-    /// 按 URL 分发 canned 响应；value 为 DioException 时按失败回放。
+    /// 按 URL 分发 canned 响应；value 为 DioException 时按失败回放，
+    /// 为 Response 时按原状态码/头回放（用于 302 跳转等）。
     Dio stub(Map<String, Object> routes) {
       final dio = Dio();
       dio.interceptors.add(
@@ -170,6 +171,18 @@ void main() {
                   requestOptions: options,
                   type: v.type,
                   error: v.error,
+                  response: v.response,
+                ),
+              );
+              return;
+            }
+            if (v is Response) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  data: v.data,
+                  statusCode: v.statusCode,
+                  headers: v.headers,
                 ),
               );
               return;
@@ -226,6 +239,211 @@ void main() {
       await expectLater(
         const UpdateService().fetchLatest(dio: dio),
         throwsFormatException,
+      );
+    });
+  });
+
+  group('跳转 Location 解析', () {
+    final req = Uri.parse(UpdateService.webLatestUrl);
+
+    test('绝对与相对地址均提取 tag', () {
+      expect(
+        UpdateService.tagFromLatestLocation(
+          req,
+          '/ke4nec/tasktips-mobile/releases/tag/v0.0.6',
+        ),
+        'v0.0.6',
+      );
+      expect(
+        UpdateService.tagFromLatestLocation(
+          req,
+          'https://github.com/ke4nec/tasktips-mobile/releases/tag/v0.0.6',
+        ),
+        'v0.0.6',
+      );
+    });
+
+    test('非 tag 形态与空串返回空', () {
+      expect(
+        UpdateService.tagFromLatestLocation(
+          req,
+          'https://github.com/ke4nec/tasktips-mobile',
+        ),
+        isEmpty,
+      );
+      expect(UpdateService.tagFromLatestLocation(req, ''), isEmpty);
+    });
+  });
+
+  group('API 限流页面回退（mock Dio，零网络）', () {
+    DioException httpError(
+      int code, {
+      Map<String, List<String>>? headers,
+      Object? data,
+    }) {
+      final opts = RequestOptions(path: UpdateService.apiLatestUrl);
+      return DioException(
+        requestOptions: opts,
+        type: DioExceptionType.badResponse,
+        response: Response(
+          requestOptions: opts,
+          statusCode: code,
+          headers: Headers.fromMap(headers ?? <String, List<String>>{}),
+          data: data,
+        ),
+      );
+    }
+
+    Response redirect302(String location) => Response(
+      requestOptions: RequestOptions(path: UpdateService.webLatestUrl),
+      statusCode: 302,
+      headers: Headers.fromMap({
+        'location': [location],
+      }),
+    );
+
+    Dio stub(Map<String, Object> routes) {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            final url = options.uri.toString();
+            final v = routes[url];
+            if (v == null) {
+              handler.reject(
+                DioException(requestOptions: options, error: 'unexpected $url'),
+              );
+              return;
+            }
+            if (v is DioException) {
+              handler.reject(
+                DioException(
+                  requestOptions: options,
+                  type: v.type,
+                  error: v.error,
+                  response: v.response,
+                ),
+              );
+              return;
+            }
+            if (v is Response) {
+              handler.resolve(
+                Response(
+                  requestOptions: options,
+                  data: v.data,
+                  statusCode: v.statusCode,
+                  headers: v.headers,
+                ),
+              );
+              return;
+            }
+            handler.resolve(
+              Response(requestOptions: options, data: v, statusCode: 200),
+            );
+          },
+        ),
+      );
+      return dio;
+    }
+
+    test('限流回退：302 取 tag + 固定名拼地址 + 验 SHA', () async {
+      const sum =
+          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      final dio = stub({
+        UpdateService.apiLatestUrl: httpError(
+          403,
+          headers: const {
+            'x-ratelimit-remaining': ['0'],
+          },
+          data: const {'message': 'API rate limit exceeded for 1.2.3.4.'},
+        ),
+        UpdateService.webLatestUrl: redirect302(
+          '/ke4nec/tasktips-mobile/releases/tag/v0.0.6',
+        ),
+        'https://github.com/ke4nec/tasktips-mobile/releases/download/v0.0.6/${UpdateService.shaAssetName}':
+            '$sum  ${UpdateService.apkAssetName}\n',
+      });
+      final r = await const UpdateService().fetchLatest(dio: dio);
+      expect(r.version, '0.0.6');
+      expect(r.tagName, 'v0.0.6');
+      expect(
+        r.apkUrl,
+        'https://github.com/ke4nec/tasktips-mobile/releases/download/v0.0.6/${UpdateService.apkAssetName}',
+      );
+      expect(r.sha256, sum);
+      expect(r.apkSize, isNull);
+    });
+
+    test('回退页 SHA 404：降级为无校验安装', () async {
+      final dio = stub({
+        UpdateService.apiLatestUrl: httpError(
+          403,
+          data: const {'message': 'API rate limit exceeded'},
+        ),
+        UpdateService.webLatestUrl: redirect302(
+          'https://github.com/ke4nec/tasktips-mobile/releases/tag/v0.0.6',
+        ),
+        'https://github.com/ke4nec/tasktips-mobile/releases/download/v0.0.6/${UpdateService.shaAssetName}':
+            httpError(404),
+      });
+      final r = await const UpdateService().fetchLatest(dio: dio);
+      expect(r.version, '0.0.6');
+      expect(r.shaUrl, isNull);
+      expect(r.sha256, isNull);
+    });
+
+    test('回退页 SHA 无效：拒绝更新', () async {
+      final dio = stub({
+        UpdateService.apiLatestUrl: httpError(
+          403,
+          data: const {'message': 'API rate limit exceeded'},
+        ),
+        UpdateService.webLatestUrl: redirect302(
+          '/ke4nec/tasktips-mobile/releases/tag/v0.0.6',
+        ),
+        'https://github.com/ke4nec/tasktips-mobile/releases/download/v0.0.6/${UpdateService.shaAssetName}':
+            'invalid checksum',
+      });
+      await expectLater(
+        const UpdateService().fetchLatest(dio: dio),
+        throwsFormatException,
+      );
+    });
+
+    test('回退页无有效跳转：仍抛原始限流错', () async {
+      final dio = stub({
+        UpdateService.apiLatestUrl: httpError(
+          403,
+          data: const {'message': 'API rate limit exceeded'},
+        ),
+        UpdateService.webLatestUrl: redirect302(
+          'https://github.com/ke4nec/tasktips-mobile',
+        ),
+      });
+      await expectLater(
+        const UpdateService().fetchLatest(dio: dio),
+        throwsA(
+          predicate(
+            (e) => e is DioException && e.response?.statusCode == 403,
+          ),
+        ),
+      );
+    });
+
+    test('非限流 403 不走回退，直接抛', () async {
+      final dio = stub({
+        UpdateService.apiLatestUrl: httpError(
+          403,
+          data: const {'message': 'Blocked by proxy'},
+        ),
+      });
+      await expectLater(
+        const UpdateService().fetchLatest(dio: dio),
+        throwsA(
+          predicate(
+            (e) => e is DioException && e.response?.statusCode == 403,
+          ),
+        ),
       );
     });
   });

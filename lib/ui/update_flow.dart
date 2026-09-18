@@ -436,7 +436,9 @@ String _shortError(Object? e) {
       // GitHub 公开 API 未认证限流（每 IP 每小时 60 次，代理共用额度时
       // 更易耗尽）同样返回 403，与代理拦截/仓库不可见同码不同因：
       // 用限流响应头 + 服务端 message 文案区分，不一律归为“网络错误”。
-      if (_isRateLimited(e)) {
+      // 判定口径与 UpdateService.isRateLimited 共用（限流时自动走页面回退，
+      // 走到这里说明回退也失败了，仍按限流提示）。
+      if (UpdateService.isRateLimited(e)) {
         return 'GitHub 接口限流（未登录每小时 60 次，代理共用更易耗尽）';
       }
       final detail = _responseMessage(e);
@@ -468,20 +470,6 @@ String _shortError(Object? e) {
   const prefix = 'FormatException: ';
   final t = s.startsWith(prefix) ? s.substring(prefix.length) : s;
   return t.length > 60 ? '${t.substring(0, 60)}…' : t;
-}
-
-/// GitHub 限流启发式：`x-ratelimit-remaining: 0` 或服务端 message 含
-/// rate limit 字样即判定为限流（未认证 403 常用此形态）。
-bool _isRateLimited(DioException e) {
-  final remaining = e.response?.headers.value('x-ratelimit-remaining');
-  if (remaining == '0') return true;
-  final data = e.response?.data;
-  final text = data is Map
-      ? '${data['message']}'
-      : data is String
-          ? data
-          : '';
-  return RegExp(r'rate.?limit', caseSensitive: false).hasMatch(text);
 }
 
 /// 提取服务端返回的一行 message（截断防超长），无有效内容返回 null。
