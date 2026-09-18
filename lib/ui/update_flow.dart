@@ -94,8 +94,10 @@ Future<void> _checkUpdateManually(
 ) async {
   if (defaultTargetPlatform != TargetPlatform.android) {
     if (context.mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('当前平台暂不支持应用内更新')));
+      _showTip(
+        context,
+        const SnackBar(content: Text('当前平台暂不支持应用内更新')),
+      );
     }
     return;
   }
@@ -124,9 +126,14 @@ Future<void> _checkUpdateManually(
   }
   if (!context.mounted) return;
   if (error != null || release == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
+    _showTip(
+      context,
       SnackBar(
         content: Text('检查更新失败：${_shortError(error)}，请稍后重试'),
+        duration: const Duration(seconds: 6),
+        // 新版 Flutter 中带 action 的 SnackBar 默认常驻（persist=true），
+        // 必须显式关闭，否则底部黑条不消失。
+        persist: false,
         action: SnackBarAction(
           label: '前往下载页',
           onPressed: () => openReleasePage(UpdateService.releasesPageUrl),
@@ -136,8 +143,10 @@ Future<void> _checkUpdateManually(
     return;
   }
   if (!service.shouldUpdate(current, release)) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(SnackBar(content: Text('已是最新版本（$current）')));
+    _showTip(
+      context,
+      SnackBar(content: Text('已是最新版本（$current）')),
+    );
     return;
   }
   await showUpdateDialog(
@@ -252,7 +261,8 @@ Future<void> _startUpdate(
           await installer.openInstallSettings();
         } catch (_) {
           if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
+            _showTip(
+              context,
               const SnackBar(content: Text('无法打开设置页，请手动开启未知来源安装权限')),
             );
           }
@@ -355,9 +365,13 @@ Future<void> _startUpdate(
 }
 
 void _showDownloadFailed(BuildContext context, ReleaseInfo release, Object e) {
-  ScaffoldMessenger.of(context).showSnackBar(
+  _showTip(
+    context,
     SnackBar(
       content: Text('下载失败：${_shortError(e)}'),
+      duration: const Duration(seconds: 6),
+      // 见上：带 action 默认常驻，必须显式关闭。
+      persist: false,
       action: SnackBarAction(
         label: '前往下载页',
         onPressed: () => openReleasePage(release.htmlUrl),
@@ -367,15 +381,28 @@ void _showDownloadFailed(BuildContext context, ReleaseInfo release, Object e) {
 }
 
 void _showInstallFailed(BuildContext context, ReleaseInfo release, Object e) {
-  ScaffoldMessenger.of(context).showSnackBar(
+  _showTip(
+    context,
     SnackBar(
       content: Text('调起安装失败：${_shortError(e)}'),
+      duration: const Duration(seconds: 6),
+      // 见上：带 action 默认常驻，必须显式关闭。
+      persist: false,
       action: SnackBarAction(
         label: '前往下载页',
         onPressed: () => openReleasePage(release.htmlUrl),
       ),
     ),
   );
+}
+
+/// 更新提示统一入口：先清队列再弹出，避免失败重试时多条排队、
+/// 看起来“底部黑条一直不消失”。
+void _showTip(BuildContext context, SnackBar bar) {
+  final messenger = ScaffoldMessenger.of(context);
+  messenger
+    ..clearSnackBars()
+    ..showSnackBar(bar);
 }
 
 /// 兜底：浏览器打开 Release 页手动下载。
@@ -405,11 +432,68 @@ String _shortError(Object? e) {
   if (e == null) return '未知错误';
   if (e is DioException) {
     final code = e.response?.statusCode;
+    if (code == 403) {
+      // GitHub 公开 API 未认证限流（每 IP 每小时 60 次，代理共用额度时
+      // 更易耗尽）同样返回 403，与代理拦截/仓库不可见同码不同因：
+      // 用限流响应头 + 服务端 message 文案区分，不一律归为“网络错误”。
+      if (_isRateLimited(e)) {
+        return 'GitHub 接口限流（未登录每小时 60 次，代理共用更易耗尽）';
+      }
+      final detail = _responseMessage(e);
+      if (detail != null) return '请求被拒绝（HTTP 403）：$detail';
+      return '请求被拒绝（HTTP 403），可能是代理拦截或仓库不可见';
+    }
+    if (code == 429) return '请求过于频繁（HTTP 429），请稍后再试';
+    if (code == 404) return '未找到更新信息（HTTP 404），可能暂无可用版本';
     if (code != null) return '网络错误（HTTP $code）';
-    return '网络错误（${e.type.name}）';
+    switch (e.type) {
+      case DioExceptionType.connectionTimeout:
+      case DioExceptionType.sendTimeout:
+      case DioExceptionType.receiveTimeout:
+      case DioExceptionType.transformTimeout:
+        return '连接超时，请检查网络或代理后重试';
+      case DioExceptionType.connectionError:
+        return '无法连接，请检查网络或代理设置后重试';
+      case DioExceptionType.cancel:
+        return '已取消';
+      case DioExceptionType.badCertificate:
+        return '证书校验失败，请检查代理或系统时间后重试';
+      case DioExceptionType.unknown:
+        return '网络错误（unknown），请检查网络或代理后重试';
+      case DioExceptionType.badResponse:
+        return '网络错误（badResponse）';
+    }
   }
   final s = e.toString();
   const prefix = 'FormatException: ';
   final t = s.startsWith(prefix) ? s.substring(prefix.length) : s;
   return t.length > 60 ? '${t.substring(0, 60)}…' : t;
+}
+
+/// GitHub 限流启发式：`x-ratelimit-remaining: 0` 或服务端 message 含
+/// rate limit 字样即判定为限流（未认证 403 常用此形态）。
+bool _isRateLimited(DioException e) {
+  final remaining = e.response?.headers.value('x-ratelimit-remaining');
+  if (remaining == '0') return true;
+  final data = e.response?.data;
+  final text = data is Map
+      ? '${data['message']}'
+      : data is String
+          ? data
+          : '';
+  return RegExp(r'rate.?limit', caseSensitive: false).hasMatch(text);
+}
+
+/// 提取服务端返回的一行 message（截断防超长），无有效内容返回 null。
+String? _responseMessage(DioException e) {
+  final data = e.response?.data;
+  final raw = data is Map
+      ? data['message']
+      : data is String
+          ? data
+          : null;
+  if (raw is! String) return null;
+  final oneLine = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+  if (oneLine.isEmpty || oneLine == 'null') return null;
+  return oneLine.length > 60 ? '${oneLine.substring(0, 60)}…' : oneLine;
 }

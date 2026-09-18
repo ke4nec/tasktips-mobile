@@ -315,4 +315,88 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+
+  group('检查失败提示', () {
+    DioException httpError(
+      int code, {
+      Map<String, List<String>>? headers,
+      Object? data,
+      DioExceptionType type = DioExceptionType.badResponse,
+    }) {
+      final opts = RequestOptions(path: UpdateService.apiLatestUrl);
+      return DioException(
+        requestOptions: opts,
+        type: type,
+        response: Response(
+          requestOptions: opts,
+          statusCode: code,
+          headers: Headers.fromMap(headers ?? <String, List<String>>{}),
+          data: data,
+        ),
+      );
+    }
+
+    Future<void> runFailingCheck(
+      WidgetTester tester,
+      Object error,
+    ) async {
+      final context = await host(tester);
+      final service = FakeUpdateService()
+        ..fetch = () => Future<ReleaseInfo>.error(error);
+      var finished = false;
+      final checking = checkUpdateManually(
+        context,
+        service: service,
+      ).whenComplete(() => finished = true);
+      await pumpUntil(tester, () => finished);
+      await checking;
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('403 限流单独提示且黑条自动消失', (tester) async {
+      await runFailingCheck(
+        tester,
+        httpError(
+          403,
+          headers: const {
+            'x-ratelimit-remaining': ['0'],
+          },
+          data: const {'message': 'API rate limit exceeded for 1.2.3.4.'},
+        ),
+      );
+      expect(find.textContaining('限流'), findsOneWidget);
+      expect(find.textContaining('每小时 60 次'), findsOneWidget);
+      // 带“前往下载页”按钮的 SnackBar 必须自动消失（persist:false 回归）。
+      await tester.pump(const Duration(seconds: 7));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('限流'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('403 非限流提示拒绝原因而非网络错误', (tester) async {
+      await runFailingCheck(
+        tester,
+        httpError(403, data: const {'message': 'Blocked by proxy'}),
+      );
+      expect(find.textContaining('请求被拒绝'), findsOneWidget);
+      expect(find.textContaining('Blocked by proxy'), findsOneWidget);
+      expect(find.textContaining('网络错误'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('404 与超时文案区分', (tester) async {
+      await runFailingCheck(tester, httpError(404));
+      expect(find.textContaining('未找到更新信息'), findsOneWidget);
+
+      await runFailingCheck(
+        tester,
+        DioException(
+          requestOptions: RequestOptions(path: UpdateService.apiLatestUrl),
+          type: DioExceptionType.connectionTimeout,
+        ),
+      );
+      expect(find.textContaining('超时'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
