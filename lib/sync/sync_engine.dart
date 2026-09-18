@@ -221,7 +221,7 @@ class SyncEngine extends ChangeNotifier {
       b.deviceId = model.deviceId;
       b.displayName = 'Android ${model.deviceId.substring(0, 8)}';
       b.platform = 'android';
-      b.appVersion = '0.0.3';
+      b.appVersion = '0.0.4';
     }));
   }
 
