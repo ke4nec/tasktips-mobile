@@ -278,8 +278,7 @@ class SettingsPage extends StatelessWidget {
         destructive: true);
     if (!ok) return;
     try {
-      await importBackup(model.store, path);
-      await model.load();
+      await model.restoreBackup(path);
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)

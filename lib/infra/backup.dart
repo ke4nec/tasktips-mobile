@@ -61,7 +61,8 @@ Future<void> exportBackup(TodoStore store, String destPath,
 }
 
 /// 从备份包恢复（覆盖本机）。校验失败或写入失败时回滚并抛 [BackupException]。
-Future<void> importBackup(TodoStore store, String srcPath) async {
+Future<void> importBackup(TodoStore store, String srcPath,
+    {Future<void> Function()? prepareRestoredContent}) async {
   late final Archive archive;
   try {
     archive = ZipDecoder()
@@ -120,6 +121,8 @@ Future<void> importBackup(TodoStore store, String srcPath) async {
       await out.parent.create(recursive: true);
       await out.writeAsBytes(f.content as List<int>, flush: true);
     }
+    // 同步层在同一回滚边界内补齐删除意图；任何失败仍恢复原 content/。
+    await prepareRestoredContent?.call();
   } catch (e) {
     // 回滚：删残留、迁回原件
     try {

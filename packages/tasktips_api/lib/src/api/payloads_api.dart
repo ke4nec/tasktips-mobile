@@ -208,7 +208,9 @@ class PayloadsApi {
         ],
         ...?extra,
       },
-      contentType: 'application/octet-stream',
+      // MANUAL PATCH: honor the caller's object media type. Regeneration must
+      // retain this override (Todo = text/markdown, classification/index = JSON).
+      contentType: contentType,
       validateStatus: validateStatus,
     );
 

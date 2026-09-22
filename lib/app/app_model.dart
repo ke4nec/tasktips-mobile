@@ -12,6 +12,7 @@ import '../domain/classification.dart';
 import '../domain/query.dart';
 import '../domain/todo.dart';
 import '../infra/store.dart';
+import '../infra/backup.dart' as backups;
 import '../sync/sync_engine.dart';
 
 enum ThemeModeSetting { system, light, dark }
@@ -59,6 +60,12 @@ class AppModel extends ChangeNotifier {
 
   @override
   void notifyListeners() {
+    invalidateDerivedData();
+    super.notifyListeners();
+  }
+
+  /// 同步按页合并通知时，逐对象写回仍须让随后读取看见新对象。
+  void invalidateDerivedData() {
     _byIdCache = null;
     _countByCategory = null;
     _openCountByCategory = null;
@@ -67,10 +74,19 @@ class AppModel extends ChangeNotifier {
     _activeCategoryIdsCache = null;
     _uncategorizedCount = null;
     _openCountByTag = null;
-    super.notifyListeners();
   }
 
   AppModel(this.store);
+
+  Future<void> restoreBackup(String path) async {
+    final engine = sync;
+    if (engine != null) {
+      await engine.restoreBackup(path);
+    } else {
+      await backups.importBackup(store, path);
+      await load();
+    }
+  }
 
   String get today {
     // 跨午夜/时区恢复前台时由调用方调用 refreshToday()
@@ -255,13 +271,14 @@ class AppModel extends ChangeNotifier {
   Future<void> purgeTodo(String id) async {
     final t = byId(id);
     if (t == null) return;
-    final ts = Tombstone(id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId);
+    final ts = Tombstone(id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision + 1, deviceId);
     index.tombstones.add(ts);
     indexVersion++;
     await store.saveIndex(index); // 墓碑先落盘
     await store.deleteTodoFile(id);
     todos.removeWhere((e) => e.id == id);
     notifyListeners();
+    scheduleAutoSync();
   }
 
   // ---------- 回收站 ----------
@@ -308,7 +325,7 @@ class AppModel extends ChangeNotifier {
     // 永不出现文件已删而墓碑丢失（他端重推时无法判定删除）。
     for (final t in expiredTodos) {
       final ts =
-          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId);
+          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision + 1, deviceId);
       index.tombstones.add(ts);
       indexVersion++;
     }
@@ -590,7 +607,7 @@ class AppModel extends ChangeNotifier {
         .toList();
     for (final t in affected) {
       index.tombstones.add(
-          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision, deviceId));
+          Tombstone(t.id, 'todo', rfc3339Utc(DateTime.now().toUtc()), t.revision + 1, deviceId));
       indexVersion++;
     }
     // 墓碑先落盘再删文件（同 purgeExpiredTrash 语义）

@@ -23,7 +23,7 @@ flutter build apk --debug   # 或 --release（签名见下）
 ```
 
 - UI 唯一批准稿：`design/android-mobile-ui.html`（v0.3）；业务行为以 `docs/tasktips-mobile-design.md` 为准。
-- HTTP 客户端由 `../tasktips-cloud/contracts/openapi.yaml` 生成，vendored 于 `packages/tasktips_api`（regen 后需重应用辨别器补丁，回归见 `test/sync_engine_test.dart`）。
+- HTTP 客户端由 `../tasktips-cloud/contracts/openapi.yaml` 生成，vendored 于 `packages/tasktips_api`（regen 后需重应用辨别器补丁，以及 `PayloadsApi.putPayload` 使用调用方 `contentType` 的补丁；回归见 `test/sync_engine_test.dart`、`test/sync_regression_test.dart`）。
 - 真机验收矩阵：`docs/manual-test-matrix.md`。性能基准：`integration_test/benchmark_test.dart`（1000 条数据集）。
 - 约定与状态记录见 [AGENTS.md](AGENTS.md)；提交格式 `<type>(<scope>): <中文描述>`。
 

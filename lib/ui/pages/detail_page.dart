@@ -49,7 +49,10 @@ class _DetailPageState extends State<DetailPage> {
   late final String _initialBody;
   int _cbCounter = 0;
   // 待保存的最新快照（比已提交保存更新的内容在此排队）
-  Todo? _pendingSnapshot;
+  String? _pendingSnapshot;
+  Future<void>? _saveFuture;
+  bool _disposed = false;
+  bool _discarding = false;
   bool _saving = false;
 
   String get _id => widget.todoId;
@@ -74,6 +77,7 @@ class _DetailPageState extends State<DetailPage> {
   @override
   void dispose() {
     // 先移除监听再触发落盘写，避免写通知打到已销毁的 State
+    _disposed = true;
     m.removeListener(_onModelChanged);
     // 离开页面立即刷新待保存内容（进程终止可能收不到回调，故不能只依赖此处）
     _flushSync();
@@ -115,6 +119,7 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   void _flushIfNeeded() {
+    if (_imeComposing || _closing || _disposed) return;
     // 有待保存内容且防抖迟迟未触发（持续输入）时兜底落盘
     if (_saveState == _SaveState.pending &&
         _lastInputAt != null &&
@@ -127,42 +132,46 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   Future<void> _saveSnapshot() async {
-    if (_saving || _closing) {
-      return;
-    }
-    final t = m.byId(_id);
-    if (t == null) return;
-    final snapshot = t.copyWith(body: _bodyCtrl.text);
-    _pendingSnapshot = snapshot;
+    if (_closing || _imeComposing || _disposed) return;
+    _pendingSnapshot = _bodyCtrl.text;
     await _drainSaves();
   }
 
-  /// 串行执行保存；较旧回执不得清除较新修改的待保存状态。
-  Future<void> _drainSaves() async {
-    if (_saving) return;
+  void _setSaveState(_SaveState state) {
+    if (_disposed || !mounted) {
+      _saveState = state;
+    } else {
+      setState(() => _saveState = state);
+    }
+  }
+
+  /// 所有等待者共享同一轮保存 Future，返回操作必须等到最新正文落盘。
+  Future<void> _drainSaves() =>
+      _saveFuture ??= _runSaves().whenComplete(() => _saveFuture = null);
+
+  Future<void> _runSaves() async {
     _saving = true;
     try {
       while (_pendingSnapshot != null) {
-        final snap = _pendingSnapshot!;
+        final body = _pendingSnapshot!;
         _pendingSnapshot = null;
-        setState(() => _saveState = _SaveState.saving);
+        final current = m.byId(_id);
+        if (current == null) return;
+        _setSaveState(_SaveState.saving);
         try {
-          await m.writeTodo(snap);
-          if (!mounted) return;
-          // 只有当输入框内容与已落盘版本一致时才显示“已保存”
-          if (_bodyCtrl.text == snap.body) {
-            setState(() {
-              _saveState = _SaveState.saved;
-            });
+          // 出队时取最新元数据，避免较旧正文快照覆盖期间修改的日期/完成状态。
+          if (current.body != body) {
+            await m.writeTodo(current.copyWith(body: body));
           }
-        } catch (e) {
-          if (!mounted) return;
-          // 恢复待保存状态并允许重试
-          _pendingSnapshot = snap;
-          setState(() {
-            _saveState = _SaveState.failed;
-          });
-          return; // 串行：失败后停止，等待重试
+          if (!_disposed &&
+              _bodyCtrl.text == body &&
+              _pendingSnapshot == null) {
+            _setSaveState(_SaveState.saved);
+          }
+        } catch (_) {
+          _pendingSnapshot ??= body; // 失败不能覆盖队列中更晚的输入
+          _setSaveState(_SaveState.failed);
+          return;
         }
       }
     } finally {
@@ -171,19 +180,30 @@ class _DetailPageState extends State<DetailPage> {
   }
 
   void _flushSync() {
-    if (_saveState == _SaveState.pending ||
-        _pendingSnapshot != null ||
-        _saveState == _SaveState.failed) {
-      final t = m.byId(_id);
-      if (t != null && t.body != _bodyCtrl.text && !_imeComposing) {
-        // dispose 里不能 await：入队后交给串行保存队列异步完成，
-        // 与在飞保存保序（避免两笔直写竞争完成顺序）
-        _pendingSnapshot = t.copyWith(body: _bodyCtrl.text);
+    if (_discarding || _imeComposing) return;
+    final current = m.byId(_id);
+    if (current != null && current.body != _bodyCtrl.text) {
+      _pendingSnapshot = _bodyCtrl.text;
+    }
+    if (_pendingSnapshot != null) unawaited(_drainSaves());
+  }
+
+  Future<bool> _saveBeforeClose() async {
+    if (_closing || _imeComposing) return false;
+    setState(() => _closing = true);
+    _debounce?.cancel();
+    _pendingSnapshot = _bodyCtrl.text;
+    await _drainSaves();
+    if (_saveState == _SaveState.failed) {
+      if (mounted) {
+        setState(() => _closing = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('仍未保存成功，已停留在编辑页，内容已保留待重试')),
+        );
       }
+      return false;
     }
-    if (_pendingSnapshot != null) {
-      unawaited(_drainSaves());
-    }
+    return true;
   }
 
   Future<bool> _onWillPop() async {
@@ -206,35 +226,23 @@ class _DetailPageState extends State<DetailPage> {
         ),
       );
       if (retry != true) return false;
-      final t = m.byId(_id);
-      if (t != null && t.body != _bodyCtrl.text && !_imeComposing) {
-        _pendingSnapshot = t.copyWith(body: _bodyCtrl.text);
-      }
-      await _drainSaves();
-      if (_saveState == _SaveState.failed) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('仍未保存成功，已停留在编辑页，内容已保留待重试')));
-        }
-        return false;
-      }
-      return true;
     }
     // 新建进来且正文始终无实质内容：直接丢弃，不留空记录。
     // 用 purge（墓碑先落盘）：创建后若已同步到远端/他端，墓碑保证收敛删除。
     if (widget.isNew &&
         _initialBody.trim().isEmpty &&
         _bodyCtrl.text.trim().isEmpty) {
+      if (_closing || _imeComposing) return false;
       _closing = true;
+      _discarding = true;
       _debounce?.cancel();
-      // 不 await：路由先退出（避免“Todo 不存在”闪屏），删除随后完成并广播刷新列表
+      _pendingSnapshot = null;
+      // 先等在飞保存结束，避免删除后又被旧写入复活。
+      if (_saveFuture != null) await _saveFuture;
       unawaited(m.purgeTodo(_id));
       return true;
     }
-    _closing = true;
-    _debounce?.cancel();
-    await _drainSaves();
-    return true;
+    return _saveBeforeClose();
   }
 
   @override
@@ -292,8 +300,7 @@ class _DetailPageState extends State<DetailPage> {
                       confirmText: '移入',
                       destructive: true);
                   if (ok) {
-                    _closing = true;
-                    await _drainSaves();
+                    if (!await _saveBeforeClose()) return;
                     await m.trashTodo(_id);
                     if (context.mounted) Navigator.of(context).pop();
                   }
@@ -318,6 +325,7 @@ class _DetailPageState extends State<DetailPage> {
                     child: TextField(
                       controller: _bodyCtrl,
                       focusNode: _bodyFocus,
+                      readOnly: _closing,
                       maxLines: null,
                       expands: true,
                       textAlignVertical: TextAlignVertical.top,
@@ -465,15 +473,18 @@ class _DetailPageState extends State<DetailPage> {
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            row(Icons.flag_outlined, '优先级', priorityLabel(t.priority),
-                _pickPriority),
             row(
-                Icons.event_outlined,
-                '截止日期',
-                t.dueDate == null
-                    ? '未设置'
-                    : friendlyDate(m.today, t.dueDate),
-                _pickDueDate),
+              Icons.flag_outlined,
+              '优先级',
+              priorityLabel(t.priority),
+              _pickPriority,
+            ),
+            row(
+              Icons.event_outlined,
+              '截止日期',
+              t.dueDate == null ? '未设置' : friendlyDate(m.today, t.dueDate),
+              _pickDueDate,
+            ),
             row(Icons.folder_outlined, '目录', catName ?? '未分类', _pickCategory),
             row(Icons.tag, '标签',
                 t.tags.isEmpty ? '未设置' : t.tags.join('、'), _pickTags),

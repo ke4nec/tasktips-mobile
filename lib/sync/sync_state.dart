@@ -10,17 +10,33 @@ class ObjectBaseline {
   final String id;
   int revision;
   String? contentHash;
+  // 已确认内容在本机序列化后的哈希。远端原始 YAML/JSON 的排版可能不同；
+  // 本地 revision 是编辑次数，不可拿来与服务端 CAS revision 比较脏状态。
+  final String? localContentHash;
 
-  ObjectBaseline(this.kind, this.id, this.revision, this.contentHash);
+  ObjectBaseline(
+    this.kind,
+    this.id,
+    this.revision,
+    this.contentHash, {
+    this.localContentHash,
+  });
 
-  Map<String, Object?> toJson() =>
-      {'kind': kind, 'id': id, 'revision': revision, 'contentHash': contentHash};
+  Map<String, Object?> toJson() => {
+    'kind': kind,
+    'id': id,
+    'revision': revision,
+    'contentHash': contentHash,
+    if (localContentHash != null) 'localContentHash': localContentHash,
+  };
 
   static ObjectBaseline fromJson(Map<String, Object?> j) => ObjectBaseline(
-      j['kind'] as String,
-      j['id'] as String,
-      (j['revision'] as num).toInt(),
-      j['contentHash'] as String?);
+    j['kind'] as String,
+    j['id'] as String,
+    (j['revision'] as num).toInt(),
+    j['contentHash'] as String?,
+    localContentHash: j['localContentHash'] as String?,
+  );
 }
 
 /// 未完成的 push 请求：请求 ID + 不可变请求内容，响应丢失后原样重试。
@@ -147,25 +163,27 @@ class SyncStateData {
   DateTime? lastSyncAt;
   bool autoSync = false;
   bool bootstrapped = false;
+  int payloadMediaVersion = 2;
 
   Map<String, Object?> toJson() => {
-        'schemaVersion': 1,
-        'serverUrl': serverUrl,
-        'accountId': accountId,
-        'email': email,
-        'projectId': projectId,
-        'generation': generation,
-        'pullCursor': pullCursor,
-        'baselines': baselines.map((k, v) => MapEntry(k, v.toJson())),
-        'pendingPush': pendingPush?.toJson(),
-        'conflicts': conflicts.map((c) => c.toJson()).toList(),
-        'logs': logs.map((l) => l.toJson()).toList(),
-        'rejected': rejected.map((k, v) => MapEntry(k, v.toJson())),
-        'submitPaused': submitPaused,
-        'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
-        'autoSync': autoSync,
-        'bootstrapped': bootstrapped,
-      };
+    'schemaVersion': 1,
+    'serverUrl': serverUrl,
+    'accountId': accountId,
+    'email': email,
+    'projectId': projectId,
+    'generation': generation,
+    'pullCursor': pullCursor,
+    'baselines': baselines.map((k, v) => MapEntry(k, v.toJson())),
+    'pendingPush': pendingPush?.toJson(),
+    'conflicts': conflicts.map((c) => c.toJson()).toList(),
+    'logs': logs.map((l) => l.toJson()).toList(),
+    'rejected': rejected.map((k, v) => MapEntry(k, v.toJson())),
+    'submitPaused': submitPaused,
+    'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
+    'autoSync': autoSync,
+    'bootstrapped': bootstrapped,
+    'payloadMediaVersion': payloadMediaVersion,
+  };
 
   static SyncStateData fromJson(Map<String, Object?> j) {
     final s = SyncStateData();
@@ -188,6 +206,7 @@ class SyncStateData {
         .map((e) => SyncLogEntry.fromJson((e as Map).cast<String, Object?>())));
     s.autoSync = j['autoSync'] == true;
     s.bootstrapped = j['bootstrapped'] == true;
+    s.payloadMediaVersion = (j['payloadMediaVersion'] as num?)?.toInt() ?? 1;
     ((j['rejected'] as Map?) ?? {}).forEach((k, v) {
       s.rejected[k as String] =
           RejectedRecord.fromJson((v as Map).cast<String, Object?>());
