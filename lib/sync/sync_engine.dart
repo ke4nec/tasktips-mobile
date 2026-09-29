@@ -257,9 +257,16 @@ class SyncEngine extends ChangeNotifier {
       }));
       state.serverUrl = normalized;
       state.email = email;
+      state.lastServerUrl = normalized;
+      state.lastEmail = email;
       dio.options.baseUrl = normalized;
       await session.updateTokens(
           login.data!.accessToken, login.data!.refreshToken, login.data!.expiresIn);
+      // 记住登录是尽力而为的增强：登录已成功，安全存储写失败不能把
+      // 成功操作变成失败（这里 catch 只捕 DioException）
+      try {
+        await session.rememberLogin(normalized, email, password);
+      } catch (_) {}
       final me = await _auth.getCurrentUser();
       state.accountId = me.data!.id;
       await registerDevice();
@@ -341,6 +348,15 @@ class SyncEngine extends ChangeNotifier {
           passwordChangeRequest: api.PasswordChangeRequest((b) => b
             ..currentPassword = current
             ..newPassword = next));
+      // 改密成功即更新记住的登录，重登时自动带出新密码
+      // （尽力而为，存储失败不影响改密结果）
+      final server = state.serverUrl;
+      final email = state.email;
+      if (server != null && email != null) {
+        try {
+          await session.rememberLogin(server, email, next);
+        } catch (_) {}
+      }
     } on DioException catch (e) {
       return _dioMessage(e, '修改密码失败');
     }
@@ -513,7 +529,9 @@ class SyncEngine extends ChangeNotifier {
     state = SyncStateData()
       ..serverUrl = state.serverUrl
       ..accountId = state.accountId
-      ..email = state.email;
+      ..email = state.email
+      ..lastServerUrl = state.lastServerUrl
+      ..lastEmail = state.lastEmail;
     status = SyncStatus.connected;
     lastError = null;
     _consecutiveFailures = 0;
@@ -605,11 +623,15 @@ class SyncEngine extends ChangeNotifier {
     final account = state.accountId;
     final email = state.email;
     final auto = state.autoSync;
+    final lastServer = state.lastServerUrl;
+    final lastEmail = state.lastEmail;
     state = SyncStateData()
       ..serverUrl = server
       ..accountId = account
       ..email = email
-      ..autoSync = auto;
+      ..autoSync = auto
+      ..lastServerUrl = lastServer
+      ..lastEmail = lastEmail;
     await _persist();
     status = SyncStatus.connected;
     notifyListeners();
@@ -622,6 +644,11 @@ class SyncEngine extends ChangeNotifier {
     await _localWrites;
     busy = false;
     final ep = _epoch;
+    // 地址/邮箱作为“上次输入”保留供登录表单回填；记住的登录
+    // （各邮箱密码）按浏览器语义保留——换号重登仍自动带出，
+    // 用户可在登录表单显式清除。
+    final lastServer = state.serverUrl ?? state.lastServerUrl;
+    final lastEmail = state.email ?? state.lastEmail;
     try {
       if (session.refreshToken != null) {
         await _auth.logout();
@@ -629,7 +656,9 @@ class SyncEngine extends ChangeNotifier {
     } catch (_) {}
     await session.clear();
     if (_epoch != ep) return;
-    state = SyncStateData();
+    state = SyncStateData()
+      ..lastServerUrl = lastServer
+      ..lastEmail = lastEmail;
     devices = [];
     status = SyncStatus.disconnected;
     state.addLog(SyncLogEntry(DateTime.now(), 'login', 0, 'logout'));

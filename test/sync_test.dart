@@ -32,7 +32,9 @@ void main() {
         ..generation = 3
         ..pullCursor = 'cursor-abc'
         ..autoSync = true
-        ..bootstrapped = true;
+        ..bootstrapped = true
+        ..lastServerUrl = 'https://last.example.com'
+        ..lastEmail = 'last@example.com';
       d.baselines[d.baselineKey('todo', '01A')] =
           ObjectBaseline('todo', '01A', 5, 'h1');
       d.pendingPush = PendingPush('req-1', 3, [
@@ -48,6 +50,8 @@ void main() {
       final back = SyncStateStore.load(raw);
 
       expect(back.serverUrl, d.serverUrl);
+      expect(back.lastServerUrl, 'https://last.example.com');
+      expect(back.lastEmail, 'last@example.com');
       expect(back.projectId, 'p-1');
       expect(back.pullCursor, 'cursor-abc');
       expect(back.baselines['todo/01A']!.revision, 5);

@@ -148,6 +148,10 @@ class SyncStateData {
   String? serverUrl; // 规范化（scheme + host[:port]）
   String? accountId;
   String? email;
+  /// 上次成功登录的地址/邮箱：logout 清空连接字段后仍保留，
+  /// 登录表单据此回填，重登免重输（密码在安全存储，见 SyncSession）。
+  String? lastServerUrl;
+  String? lastEmail;
   String? projectId;
   int? generation;
   String? pullCursor;
@@ -170,6 +174,8 @@ class SyncStateData {
     'serverUrl': serverUrl,
     'accountId': accountId,
     'email': email,
+    'lastServerUrl': lastServerUrl,
+    'lastEmail': lastEmail,
     'projectId': projectId,
     'generation': generation,
     'pullCursor': pullCursor,
@@ -190,6 +196,8 @@ class SyncStateData {
     s.serverUrl = j['serverUrl'] as String?;
     s.accountId = j['accountId'] as String?;
     s.email = j['email'] as String?;
+    s.lastServerUrl = j['lastServerUrl'] as String?;
+    s.lastEmail = j['lastEmail'] as String?;
     s.projectId = j['projectId'] as String?;
     s.generation = (j['generation'] as num?)?.toInt();
     s.pullCursor = j['pullCursor'] as String?;

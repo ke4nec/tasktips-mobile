@@ -3,6 +3,7 @@ import 'package:tasktips_api/tasktips_api.dart' as api;
 import 'package:workmanager/workmanager.dart';
 
 import '../../app/app_model.dart';
+import '../../sync/session.dart' show tryNormalizeServerUrl;
 import '../../sync/sync_engine.dart';
 import '../app.dart';
 import '../theme.dart';
@@ -38,6 +39,9 @@ class _SyncPageState extends State<SyncPage> {
     // 设计 §4.2：预览后本机或远端又发生修改时重新计算，
     // 不按过期预览展示——本机数据变化即失效缓存。
     widget.model.addListener(_onModelChanged);
+    _serverCtrl.addListener(_onIdentityChanged);
+    _emailCtrl.addListener(_onIdentityChanged);
+    _passwordCtrl.addListener(_onPasswordEdited);
   }
 
   void _onModelChanged() {
@@ -49,6 +53,9 @@ class _SyncPageState extends State<SyncPage> {
   @override
   void dispose() {
     widget.model.removeListener(_onModelChanged);
+    _serverCtrl.removeListener(_onIdentityChanged);
+    _emailCtrl.removeListener(_onIdentityChanged);
+    _passwordCtrl.removeListener(_onPasswordEdited);
     _serverCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
@@ -81,6 +88,9 @@ class _SyncPageState extends State<SyncPage> {
           if (sync.state.serverUrl == null) {
             return _loginForm(context, a);
           }
+          // 已连接：登录表单不再展示，复位回填标记，
+          // 下次登出/session 过期回到表单时按当前状态重新回填
+          _loginSeeded = false;
           if (sync.state.projectId == null) {
             return _projectPicker(context, a);
           }
@@ -92,7 +102,69 @@ class _SyncPageState extends State<SyncPage> {
 
   // ---------- 登录 ----------
 
+  /// 登录表单每次出现时回填上次输入（session 过期重登免重输）。
+  /// 已连接期间复位（见 build），同一页面会话内多次登出/重登均重新回填；
+  /// 仅回填空字段，不覆盖用户本次已输入的内容。
+  bool _loginSeeded = false;
+  /// 密码框当前内容来自“记住的登录”：切换邮箱未命中时随之清空；
+  /// 手动编辑过的密码（见 [_onPasswordEdited]）不受影响。
+  bool _pwFromVault = false;
+
+  void _seedLoginForm() {
+    if (_loginSeeded) return;
+    _loginSeeded = true;
+    final st = _sync!.state;
+    if (_serverCtrl.text.isEmpty && st.lastServerUrl != null) {
+      _serverCtrl.text = st.lastServerUrl!;
+    }
+    if (_emailCtrl.text.isEmpty && st.lastEmail != null) {
+      _emailCtrl.text = st.lastEmail!;
+    }
+    // 记住的登录在安全存储，异步加载后回填
+    _sync!.session.loadRememberedLogins().then((_) {
+      if (!mounted) return;
+      if (_passwordCtrl.text.isEmpty) {
+        final pw = _lookupRememberedPassword();
+        if (pw != null) {
+          _passwordCtrl.text = pw;
+          _pwFromVault = true;
+        }
+      }
+      // “清除记住的登录密码”入口按有无记录显隐
+      setState(() {});
+    });
+  }
+
+  /// 按当前输入的地址/邮箱查“记住的登录”里的密码。
+  String? _lookupRememberedPassword() {
+    final s = _sync;
+    if (s == null) return null;
+    final server =
+        tryNormalizeServerUrl(_serverCtrl.text) ?? _serverCtrl.text.trim();
+    return s.session.rememberedPassword(server, _emailCtrl.text.trim());
+  }
+
+  /// 浏览器式换号：邮箱/地址变化时取对应密码——命中即覆盖密码框；
+  /// 未命中且密码框是自动填充的则清空（旧密码属于别的账号）。
+  void _onIdentityChanged() {
+    if (!_loginSeeded) return;
+    final pw = _lookupRememberedPassword();
+    if (pw != null) {
+      if (_passwordCtrl.text != pw) _passwordCtrl.text = pw;
+      _pwFromVault = true;
+    } else if (_pwFromVault) {
+      _passwordCtrl.clear();
+    }
+  }
+
+  /// 密码框被手动改动后不再视为自动填充内容，切换邮箱不覆盖/清空它。
+  /// 程序化写入先触发本监听再显式置回标记，故无需额外守卫。
+  void _onPasswordEdited() {
+    _pwFromVault = false;
+  }
+
   Widget _loginForm(BuildContext context, AppColors a) {
+    _seedLoginForm();
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -150,6 +222,21 @@ class _SyncPageState extends State<SyncPage> {
                   child: CircularProgressIndicator(strokeWidth: 2))
               : const Text('登录'),
         ),
+        if (_sync!.session.hasRememberedLogins)
+          TextButton(
+            onPressed: () async {
+              try {
+                await _sync!.session.clearRememberedLogins();
+              } catch (_) {
+                // 存储失败按已清除收敛界面；下次加载若仍在会再次带出
+              }
+              if (!mounted) return;
+              _pwFromVault = false;
+              _passwordCtrl.clear();
+              setState(() {});
+            },
+            child: const Text('清除记住的登录密码'),
+          ),
       ],
     );
   }
@@ -158,13 +245,14 @@ class _SyncPageState extends State<SyncPage> {
     setState(() => _connecting = true);
     final err = await _sync!.connect(
       serverUrl: _serverCtrl.text,
-      email: _emailCtrl.text,
+      email: _emailCtrl.text.trim(),
       password: _passwordCtrl.text,
     );
     if (!mounted) return;
     setState(() => _connecting = false);
     if (err != null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+      return; // 失败保留已输入内容，便于修正后重试
     }
     _passwordCtrl.clear();
   }
