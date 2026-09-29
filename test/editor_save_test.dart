@@ -130,6 +130,51 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('保存失败后的返回确认为底部弹层且可留在本页', (tester) async {
+    final m = MemoryModel()..failWrites = true;
+    final nav = GlobalKey<NavigatorState>();
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: nav,
+        home: const Scaffold(body: Text('home')),
+      ),
+    );
+    nav.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => DetailPage(model: m, todoId: 'one'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '不能丢失');
+    // 防抖保存已触发并失败，再返回即进入确认弹层。
+    await tester.pump(const Duration(milliseconds: 450));
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    // 全 app 确认弹层统一为底部 sheet，不再用居中 AlertDialog。
+    expect(find.byType(AlertDialog), findsNothing);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(find.text('留在本页'), findsOneWidget);
+    expect(find.text('尝试保存并返回'), findsOneWidget);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('留在本页'));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byType(DetailPage), findsOneWidget);
+    // 再次返回仍先弹确认；选择重试保存失败后停留本页、正文保留。
+    await tester.tap(find.byType(BackButton));
+    await tester.pump();
+    expect(find.byType(BottomSheet), findsOneWidget);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('尝试保存并返回'));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(DetailPage), findsOneWidget);
+    expect(find.text('不能丢失'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('外部移除编辑页后在飞保存仍会排空最新正文', (tester) async {
     final m = MemoryModel()..gate = Completer<void>();
     await tester.pumpWidget(

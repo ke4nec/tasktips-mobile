@@ -158,6 +158,31 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('检查完成加载弹层带动画滑出而非瞬间消失', (tester) async {
+    final context = await host(tester);
+    final response = Completer<ReleaseInfo>();
+    final service = FakeUpdateService()..fetch = () => response.future;
+    var finished = false;
+    final checking = checkUpdateManually(
+      context,
+      service: service,
+    ).whenComplete(() => finished = true);
+    await tester.pump();
+    // 入场动画完成后观察；弹层内进度圈常转，不能 pumpAndSettle。
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(BottomSheet), findsOneWidget);
+    response.complete(release);
+    await tester.pump();
+    // pop 已触发但退出动画未结束：弹层仍在滑出、close() 未完成。
+    expect(finished, isFalse);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    await pumpUntil(tester, () => finished);
+    await checking;
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'Startup and manual checks share a lock and honor a disabled setting',
     (tester) async {

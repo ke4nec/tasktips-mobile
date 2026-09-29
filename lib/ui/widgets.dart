@@ -600,6 +600,7 @@ Future<bool> confirmDialog(
   required String title,
   required String message,
   String confirmText = '确定',
+  String cancelText = '取消',
   bool destructive = false,
 }) async {
   final a = appColors(context, Theme.of(context).brightness);
@@ -640,7 +641,7 @@ Future<bool> confirmDialog(
                   style: TextButton.styleFrom(
                       minimumSize: const Size(72, 48)),
                   onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('取消'),
+                  child: Text(cancelText),
                 ),
                 const SizedBox(width: 8),
                 FilledButton(

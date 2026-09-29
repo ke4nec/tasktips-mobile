@@ -53,8 +53,24 @@ class _UpdateProgressRoute {
     unawaited(Navigator.of(context, rootNavigator: true).push(route));
   }
 
+  bool _closed = false;
+
+  /// 栈顶时走 pop() 带动画滑出（与其余底部弹层动效一致；PopScope(canPop:false)
+  /// 只拦系统返回，不拦 Navigator.pop）；被其他路由盖住时 pop 只能关栈顶，
+  /// 保底 removeRoute 立即移除。_closed 保证关闭动作只触发一次；重复调用仍等
+  /// completed（退出动画结束、路由释放后才完成），调用方据此安全释放进度流。
   Future<void> close() async {
-    if (route.isActive) route.navigator?.removeRoute(route);
+    if (!_closed) {
+      _closed = true;
+      final nav = route.navigator;
+      if (route.isActive && nav != null) {
+        if (route.isCurrent) {
+          nav.pop();
+        } else {
+          nav.removeRoute(route);
+        }
+      }
+    }
     await route.completed;
   }
 }

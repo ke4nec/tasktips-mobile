@@ -214,18 +214,14 @@ class _DetailPageState extends State<DetailPage> {
     }
     // 保存失败时不能丢弃正文返回（设计 §2：失败停留编辑页并提供重试）
     if (_saveState == _SaveState.failed) {
-      final retry = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('尚未保存'),
-          content: const Text('正文保存失败。返回前会再次尝试保存；仍失败时将停留在本页，正文不会丢弃。'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('留在本页')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('尝试保存并返回')),
-          ],
-        ),
+      final retry = await confirmDialog(
+        context,
+        title: '尚未保存',
+        message: '正文保存失败。返回前会再次尝试保存；仍失败时将停留在本页，正文不会丢弃。',
+        cancelText: '留在本页',
+        confirmText: '尝试保存并返回',
       );
-      if (retry != true) return false;
+      if (!retry) return false;
     }
     // 新建进来且正文始终无实质内容：直接丢弃，不留空记录。
     // 用 purge（墓碑先落盘）：创建后若已同步到远端/他端，墓碑保证收敛删除。
