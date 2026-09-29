@@ -74,14 +74,6 @@ class _SyncPageState extends State<SyncPage> {
     }
     return SecondaryScaffold(
       title: '同步',
-      actions: [
-        if (sync.state.serverUrl != null)
-          IconButton(
-            tooltip: '立即同步',
-            onPressed: sync.busy ? null : () => sync.syncNow(manual: true),
-            icon: const Icon(Icons.sync),
-          ),
-      ],
       body: AnimatedBuilder(
         animation: sync,
         builder: (context, _) {
@@ -640,11 +632,17 @@ class _SyncPageState extends State<SyncPage> {
                   width: 16,
                   child: CircularProgressIndicator(strokeWidth: 2)),
           ]),
+          const SizedBox(height: 8),
+          _serverInfoLine(a, Icons.dns_outlined, '服务端',
+              sync.state.serverUrl ?? '—'),
           const SizedBox(height: 4),
-          Text(
-              '${sync.state.serverUrl ?? ''} · ${sync.state.email ?? ''}'
-              '${sync.state.lastSyncAt != null ? ' · 上次同步 ${_fmtLastSync(sync.state.lastSyncAt!)}' : ''}',
-              style: TextStyle(fontSize: 13, color: a.muted)),
+          _serverInfoLine(
+              a, Icons.mail_outlined, '账号', sync.state.email ?? '—'),
+          if (sync.state.lastSyncAt != null) ...[
+            const SizedBox(height: 4),
+            _serverInfoLine(a, Icons.access_time_outlined, '上次同步',
+                _fmtLastSync(sync.state.lastSyncAt!)),
+          ],
           if (sync.lastError != null) ...[
             const SizedBox(height: 8),
             Text(sync.lastError!,
@@ -662,6 +660,29 @@ class _SyncPageState extends State<SyncPage> {
           ]),
         ],
       ),
+    );
+  }
+
+  /// 状态卡内的服务端信息行：图标 + 固定标签 + 可省略的值，分行展示，
+  /// 避免地址/邮箱/上次同步挤在一行溢出。
+  Widget _serverInfoLine(
+      AppColors a, IconData icon, String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: a.muted),
+        const SizedBox(width: 6),
+        Text(label, style: TextStyle(fontSize: 13, color: a.muted)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(fontSize: 13, color: a.muted),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 

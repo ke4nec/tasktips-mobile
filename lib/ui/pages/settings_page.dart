@@ -40,7 +40,7 @@ class SettingsPage extends StatelessWidget {
             _navRow(
               context,
               '同步',
-              model.sync?.state.autoSync == true ? '自动同步已开启' : '自动同步已关闭',
+              '服务器设置与多设备同步',
               Icons.sync_outlined,
               () => openSyncPage(context, model),
             ),
