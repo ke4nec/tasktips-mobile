@@ -5,6 +5,8 @@
 /// 检查失败一律抛错，由调用方静默吞掉或转提示——永不阻塞启动首帧。
 library;
 
+import 'dart:io';
+
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -49,35 +51,119 @@ class UpdateService {
     }
   }
 
+  /// 检查重试：国内到 GitHub 抖动多，瞬时故障自动重试。
+  /// 仅超时/断连/无响应/429/408/5xx 重试；4xx（限流 403 走页面回退，
+  /// 不在此重试）、证书错误、取消、内容/校验错误一律直抛。
+  static const int fetchMaxAttempts = 3;
+
+  /// 下载重试：每次失败保留已落盘分片，下次带 Range 续传。
+  static const int downloadMaxAttempts = 5;
+
+  static Duration _fetchBackoff(int failedAttempt) {
+    final ms = 500 * (1 << (failedAttempt - 1));
+    return Duration(milliseconds: ms > 3000 ? 3000 : ms);
+  }
+
+  static Duration _downloadBackoff(int failedAttempt) {
+    final ms = 800 * (1 << (failedAttempt - 1));
+    return Duration(milliseconds: ms > 5000 ? 5000 : ms);
+  }
+
+  /// 瞬时网络故障判定（检查/下载共用）：超时、断连、未知网络错误、
+  /// 429/408、5xx 可重试；取消、证书错误、其他 4xx 不重试。
+  static bool _isTransientDio(DioException e) {
+    if (e.type == DioExceptionType.cancel) return false;
+    if (e.type == DioExceptionType.badCertificate) return false;
+    if (e.type == DioExceptionType.badResponse) {
+      final code = e.response?.statusCode;
+      if (code == null) return true;
+      if (code == 429 || code == 408) return true;
+      if (code >= 500 && code <= 599) return true;
+      return false;
+    }
+    return true;
+  }
+
+  /// dio 对 stream 响应体的消费期错误不做包装（其 handleResponseStream
+  /// 的 onError 原样透传底层异常），body 中途断连到调用方手里是裸
+  /// SocketException/HttpException——不转成 DioException 会绕过
+  /// downloadApk 的重试循环。FileSystemException 属磁盘错误，不在捕获
+  /// 内（重试无意义）。
+  static Future<T> _netErrorsAsDio<T>(
+    Future<T> Function() action,
+    RequestOptions requestOptions,
+  ) async {
+    try {
+      return await action();
+    } on SocketException catch (e) {
+      throw DioException.connectionError(
+        requestOptions: requestOptions,
+        reason: e.message,
+        error: e,
+      );
+    } on HttpException catch (e) {
+      throw DioException.connectionError(
+        requestOptions: requestOptions,
+        reason: e.message,
+        error: e,
+      );
+    }
+  }
+
+  Dio _defaultFetchClient() => Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 30),
+      sendTimeout: const Duration(seconds: 10),
+      headers: {
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'TaskTips-Mobile',
+      },
+    ),
+  );
+
+  Dio _defaultDownloadClient() => Dio(
+    BaseOptions(
+      connectTimeout: const Duration(seconds: 15),
+      // 续传兜底后不必等太久：30s 无字节即超时，中断后下次带 Range 续上。
+      receiveTimeout: const Duration(seconds: 30),
+      headers: const {'User-Agent': 'TaskTips-Mobile'},
+    ),
+  );
+
   /// 拉取最新 Release 并（若存在校验文件）解析出 APK 的 SHA-256。
   ///
   /// 主路径走 GitHub API；仅当 API 明确限流（403 + 限流特征）时回退到
   /// Release 页面（302 跳转取 tag + 固定名拼下载地址 + 同样验 SHA）。
   /// 回退页本身不可用时抛原始限流错（提示口径不变）；SHA 校验类失败
   /// 原样抛出（疑似篡改/损坏，必须明示并拒绝更新）。
+  ///
+  /// 国内链路抖动多：瞬时故障（超时/断连/5xx/429）整体重试
+  /// [fetchMaxAttempts] 次，退避 0.5s→1s→封顶 3s。
   Future<ReleaseInfo> fetchLatest({Dio? dio}) async {
-    final client =
-        dio ??
-        Dio(
-          BaseOptions(
-            connectTimeout: const Duration(seconds: 10),
-            receiveTimeout: const Duration(seconds: 15),
-            sendTimeout: const Duration(seconds: 10),
-            headers: {
-              'Accept': 'application/vnd.github+json',
-              'User-Agent': 'TaskTips-Mobile',
-            },
-          ),
-        );
+    final client = dio ?? _defaultFetchClient();
     try {
-      try {
-        return await _fetchViaApi(client);
-      } on DioException catch (e) {
-        if (e.response?.statusCode != 403 || !isRateLimited(e)) rethrow;
+      for (var attempt = 1; ; attempt++) {
         try {
-          return await _fetchViaWeb(client);
+          try {
+            return await _fetchViaApi(client);
+          } on DioException catch (e) {
+            if (e.response?.statusCode != 403 || !isRateLimited(e)) rethrow;
+            try {
+              return await _fetchViaWeb(client);
+            } on _WebFallbackUnavailable {
+              throw e;
+            }
+          }
+        } on FormatException {
+          rethrow;
         } on _WebFallbackUnavailable {
-          throw e;
+          rethrow;
+        } on DioException catch (e) {
+          // 限流 403 本身重试无意义（回退链路已定），直接抛。
+          if (e.response?.statusCode == 403 && isRateLimited(e)) rethrow;
+          if (!_isTransientDio(e) || attempt >= fetchMaxAttempts) rethrow;
+          await Future.delayed(_fetchBackoff(attempt));
         }
       }
     } finally {
@@ -107,20 +193,19 @@ class UpdateService {
   /// CI 固定名构造（`releases/download/<tag>/…` 为稳定链接，无需解析 HTML）。
   /// SHA 拉取成功必须含有效摘要；404 视为历史无校验版本降级（调用方提示
   /// 确认来源）；其他失败拒绝本次更新。
+  ///
+  /// 注意：跳转页本身的网络失败（超时/5xx 等）直接以 DioException 冒泡，
+  /// 由 [fetchLatest] 统一判瞬时重试；仅“无有效 tag 跳转”的内容问题抛
+  /// [_WebFallbackUnavailable]（调用方转原始限流错，不重试）。
   Future<ReleaseInfo> _fetchViaWeb(Dio client) async {
-    late final Response<String> resp;
-    try {
-      resp = await client.get<String>(
-        webLatestUrl,
-        options: Options(
-          responseType: ResponseType.plain,
-          followRedirects: false,
-          validateStatus: (s) => s != null && s >= 200 && s < 400,
-        ),
-      );
-    } on DioException {
-      throw const _WebFallbackUnavailable();
-    }
+    final resp = await client.get<String>(
+      webLatestUrl,
+      options: Options(
+        responseType: ResponseType.plain,
+        followRedirects: false,
+        validateStatus: (s) => s != null && s >= 200 && s < 400,
+      ),
+    );
     final tag = tagFromLatestLocation(
       resp.requestOptions.uri,
       resp.headers.value('location') ?? '',
@@ -196,6 +281,13 @@ class UpdateService {
       0;
 
   /// 下载 APK 到 [savePath]（调用方传入 cache 目录文件路径）。
+  ///
+  /// 弱网优化：瞬时中断自动重试（最多 [downloadMaxAttempts] 次），失败
+  /// 保留已落盘分片，下次带 `Range` 续传（服务端不支持则回退全量重下，
+  /// 先截断再写，避免“旧分片+全量”拼接损坏）。body 中途断连的裸网络
+  /// 异常归一为 DioException（dio 对 stream 消费期错误不包装，见
+  /// [_netErrorsAsDio]），否则绕过重试。取消直抛不重试。
+  /// 完整性由调用方 SHA-256 终检兜底（不一致删后重下，见 update_flow）。
   Future<void> downloadApk({
     required String url,
     required String savePath,
@@ -203,25 +295,111 @@ class UpdateService {
     Dio? dio,
     CancelToken? cancelToken,
   }) async {
-    final client =
-        dio ??
-        Dio(
-          BaseOptions(
-            connectTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 120),
-            headers: const {'User-Agent': 'TaskTips-Mobile'},
-          ),
-        );
+    final client = dio ?? _defaultDownloadClient();
     try {
-      await client.download(
-        url,
-        savePath,
-        onReceiveProgress: onProgress,
-        cancelToken: cancelToken,
-      );
+      for (var attempt = 1; ; attempt++) {
+        try {
+          await _downloadOnce(
+            client,
+            url: url,
+            savePath: savePath,
+            onProgress: onProgress,
+            cancelToken: cancelToken,
+          );
+          return;
+        } on DioException catch (e) {
+          if (cancelToken?.isCancelled == true ||
+              e.type == DioExceptionType.cancel) {
+            rethrow;
+          }
+          if (!_isTransientDio(e) || attempt >= downloadMaxAttempts) rethrow;
+          await Future.delayed(_downloadBackoff(attempt));
+        }
+      }
     } finally {
       if (dio == null) client.close();
     }
+  }
+
+  /// 单次下载尝试：已落盘分片带 Range 续传。206 追加，200（服务端忽略
+  /// Range）截断重写，416（本地已越界/完整）直接返回交由 SHA 终检。
+  Future<void> _downloadOnce(
+    Dio client, {
+    required String url,
+    required String savePath,
+    required ProgressCallback onProgress,
+    CancelToken? cancelToken,
+  }) async {
+    final file = File(savePath);
+    await file.parent.create(recursive: true);
+    final existing = await file.exists() ? await file.length() : 0;
+    final resp = await client.get<ResponseBody>(
+      url,
+      options: Options(
+        responseType: ResponseType.stream,
+        headers: existing > 0 ? {'Range': 'bytes=$existing-'} : null,
+        validateStatus: (s) => s == 200 || s == 206 || s == 416,
+      ),
+      cancelToken: cancelToken,
+    );
+    final body = resp.data;
+    if (body == null) {
+      throw DioException(
+        requestOptions: resp.requestOptions,
+        type: DioExceptionType.badResponse,
+        error: '下载响应为空',
+      );
+    }
+    if (resp.statusCode == 416) {
+      // 本地已完整或更大：无需再写，SHA 终检会拦截“更大但不对”的情况。
+      await _netErrorsAsDio(body.stream.drain<void>, resp.requestOptions);
+      return;
+    }
+    var base = existing;
+    int total;
+    if (resp.statusCode == 206) {
+      total = _totalFromContentRange(
+        resp.headers.value('content-range'),
+        fallback: existing + body.contentLength,
+      );
+    } else {
+      total = body.contentLength;
+      if (existing > 0) base = 0; // 服务端忽略 Range：截断重写防拼接损坏
+    }
+    final raf = await file.open(
+      mode: base > 0 ? FileMode.append : FileMode.write,
+    );
+    var received = 0;
+    try {
+      await _netErrorsAsDio(() async {
+        await for (final chunk in body.stream) {
+          if (cancelToken?.isCancelled == true) {
+            throw DioException(
+              requestOptions: resp.requestOptions,
+              type: DioExceptionType.cancel,
+            );
+          }
+          await raf.writeFrom(chunk);
+          received += chunk.length;
+          try {
+            onProgress(base + received, total);
+          } catch (_) {}
+        }
+        await raf.flush();
+      }, resp.requestOptions);
+    } finally {
+      await raf.close();
+    }
+  }
+
+  /// 从 `Content-Range: bytes <start>-<end>/<total>` 取总量；解析失败
+  /// 回退 [fallback]（206 下为 已有+剩余，200 下为 Content-Length）。
+  static int _totalFromContentRange(String? value, {required int fallback}) {
+    if (value == null) return fallback;
+    final m = RegExp(r'/(\d+)\s*$').firstMatch(value);
+    final n = m == null ? null : int.tryParse(m.group(1)!);
+    if (n == null || n < 0) return fallback;
+    return n;
   }
 
   // ---------- 纯函数（可单测） ----------
@@ -372,8 +550,9 @@ class UpdateService {
   }
 }
 
-/// 页面回退不可用（跳转页拉取失败/无有效 tag 跳转）：调用方据此抛原始
-/// API 限流错。SHA 校验类失败不用它（须原样暴露并拒绝更新）。
+/// 页面回退不可用（无有效 tag 跳转的内容问题）：调用方据此抛原始
+/// API 限流错。跳转页本身的网络失败以 DioException 冒泡，由 fetchLatest
+/// 统一判瞬时重试；SHA 校验类失败不用它（须原样暴露并拒绝更新）。
 class _WebFallbackUnavailable implements Exception {
   const _WebFallbackUnavailable();
 }

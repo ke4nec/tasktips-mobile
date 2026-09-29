@@ -385,7 +385,7 @@ Future<void> _startUpdate(
     final savePath = p.join(downloadDir.path, 'update.apk');
     final f = File(savePath);
     if (cancel.isCancelled || !context.mounted) return;
-    await service.downloadApk(
+    Future<void> downloadOnce() => service.downloadApk(
       url: release.apkUrl,
       savePath: savePath,
       cancelToken: cancel,
@@ -395,14 +395,27 @@ Future<void> _startUpdate(
         }
       },
     );
+    // downloadApk 内部已断点续传+重试；这里只负责调起。
+    await downloadOnce();
     if (cancel.isCancelled || !context.mounted) return;
     if (release.shaUrl != null && release.sha256 == null) {
       throw const FormatException('校验文件缺少有效的 APK SHA-256');
     }
     if (release.sha256 != null) {
-      final actual = await UpdateService.sha256Of(f.openRead());
+      var actual = await UpdateService.sha256Of(f.openRead());
       if (actual.toLowerCase() != release.sha256!.toLowerCase()) {
-        throw const FormatException('安装包校验失败（SHA-256 不一致）');
+        // 续传拼接损坏或传输坏块：删除后从零重下一次；仍不一致则拒绝安装。
+        try {
+          await f.delete();
+        } catch (_) {}
+        progress.value = 0;
+        if (cancel.isCancelled || !context.mounted) return;
+        await downloadOnce();
+        if (cancel.isCancelled || !context.mounted) return;
+        actual = await UpdateService.sha256Of(f.openRead());
+        if (actual.toLowerCase() != release.sha256!.toLowerCase()) {
+          throw const FormatException('安装包校验失败（SHA-256 不一致）');
+        }
       }
     }
     // 包已验明：只保留最新一份，清掉历史残留（上次成功安装留下的包等）
