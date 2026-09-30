@@ -175,6 +175,40 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets('编辑态优先级行与格式工具栏间不叠加安全区空白', (tester) async {
+    // 手势导航条：底部安全区 40（物理 120 / dpr 3）。
+    tester.view.physicalSize = const Size(2400, 1800);
+    tester.view.devicePixelRatio = 3.0;
+    tester.view.padding = const FakeViewPadding(bottom: 120);
+    addTearDown(tester.view.reset);
+    final m = MemoryModel();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DetailPage(model: m, todoId: 'one'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    // 编辑态格式工具栏垫在元数据栏下方且自带 SafeArea，两行之间只剩
+    // 4 呼吸间距 + 1px 分隔线（设计稿 .editor-toolbar 的 border-top），
+    // 不再空出一条安全区高度。
+    final metaRow = tester.getRect(
+      find
+          .ancestor(of: find.text('优先级'), matching: find.byType(InkWell))
+          .first,
+    );
+    final toolbarBtn = tester.getRect(find.byTooltip('标题'));
+    expect(toolbarBtn.top - metaRow.bottom, 5.0);
+    // 预览态无格式工具栏，元数据栏成为最底部元素，仍需让出导航栏。
+    await tester.tap(find.byTooltip('预览'));
+    await tester.pumpAndSettle();
+    final lastRow = tester.getRect(
+      find.ancestor(of: find.text('标签'), matching: find.byType(InkWell))
+          .first,
+    );
+    expect(600 - lastRow.bottom, 44.0); // 4 呼吸 + 40 安全区
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('外部移除编辑页后在飞保存仍会排空最新正文', (tester) async {
     final m = MemoryModel()..gate = Completer<void>();
     await tester.pumpWidget(

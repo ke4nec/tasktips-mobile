@@ -457,10 +457,13 @@ class _DetailPageState extends State<DetailPage> {
       );
     }
 
+    // 预览态本栏是最底部元素，需让出系统导航栏；编辑态格式工具栏垫在
+    // 下方且已自带 SafeArea，这里再叠加 padding.bottom 会在两行之间
+    // 空出一条安全区高度的白边。
+    final safeBottom = _preview ? MediaQuery.of(context).padding.bottom : 0.0;
     return Container(
       padding: EdgeInsets.only(
-          left: 4, right: 4, top: 4,
-          bottom: 4 + MediaQuery.of(context).padding.bottom),
+          left: 4, right: 4, top: 4, bottom: 4 + safeBottom),
       decoration: BoxDecoration(
         color: a.panel,
         border: Border(top: BorderSide(color: a.line)),
@@ -704,7 +707,11 @@ class _DetailPageState extends State<DetailPage> {
           ),
         );
     return Container(
-      color: a.panel,
+      decoration: BoxDecoration(
+        color: a.panel,
+        // 设计稿 .editor-toolbar：与上方元数据栏仅以 1px 分隔线相隔
+        border: Border(top: BorderSide(color: a.line)),
+      ),
       child: SafeArea(
         top: false,
         child: SingleChildScrollView(
