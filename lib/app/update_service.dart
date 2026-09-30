@@ -5,6 +5,7 @@
 /// 检查失败一律抛错，由调用方静默吞掉或转提示——永不阻塞启动首帧。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -55,6 +56,12 @@ class UpdateService {
   /// 仅超时/断连/无响应/429/408/5xx 重试；4xx（限流 403 走页面回退，
   /// 不在此重试）、证书错误、取消、内容/校验错误一律直抛。
   static const int fetchMaxAttempts = 3;
+
+  /// 整条检查链路（API → 限流页面回退 → 全部重试与退避）的总时限。
+  /// 单次请求超时（连接 15s/接收 30s，含 SHA 拉取）与多次重试叠加后
+  /// 最坏可达分钟级，用户会被“正在检查更新…”卡住；到点即取消在飞
+  /// 请求并按连接超时收口。启动静默检查与手动检查共用。
+  static const Duration fetchTimeout = Duration(seconds: 30);
 
   /// 下载重试：每次失败保留已落盘分片，下次带 Range 续传。
   static const int downloadMaxAttempts = 5;
@@ -139,46 +146,79 @@ class UpdateService {
   /// 原样抛出（疑似篡改/损坏，必须明示并拒绝更新）。
   ///
   /// 国内链路抖动多：瞬时故障（超时/断连/5xx/429）整体重试
-  /// [fetchMaxAttempts] 次，退避 0.5s→1s→封顶 3s。
-  Future<ReleaseInfo> fetchLatest({Dio? dio}) async {
+  /// [fetchMaxAttempts] 次，退避 0.5s→1s→封顶 3s。整条链路受
+  /// [fetchTimeout]（或 [timeout]）总时限约束：Timer 到点取消在飞请求，
+  /// `.timeout` 同宽限兜底（拦截器挂起等不经过取消通道的场景），
+  /// 两条路径统一转 [DioExceptionType.connectionTimeout] 抛出。
+  Future<ReleaseInfo> fetchLatest({Dio? dio, Duration? timeout}) async {
     final client = dio ?? _defaultFetchClient();
+    final budget = timeout ?? fetchTimeout;
+    final token = CancelToken();
+    final deadline = Timer(budget, () => token.cancel('fetch timeout'));
     try {
-      for (var attempt = 1; ; attempt++) {
-        try {
-          try {
-            return await _fetchViaApi(client);
-          } on DioException catch (e) {
-            if (e.response?.statusCode != 403 || !isRateLimited(e)) rethrow;
-            try {
-              return await _fetchViaWeb(client);
-            } on _WebFallbackUnavailable {
-              throw e;
-            }
-          }
-        } on FormatException {
-          rethrow;
-        } on _WebFallbackUnavailable {
-          rethrow;
-        } on DioException catch (e) {
-          // 限流 403 本身重试无意义（回退链路已定），直接抛。
-          if (e.response?.statusCode == 403 && isRateLimited(e)) rethrow;
-          if (!_isTransientDio(e) || attempt >= fetchMaxAttempts) rethrow;
-          await Future.delayed(_fetchBackoff(attempt));
-        }
-      }
+      return await _fetchWithRetries(client, token, budget).timeout(
+        budget,
+        onTimeout: () => throw _timeoutException(budget),
+      );
     } finally {
+      deadline.cancel();
       if (dio == null) client.close();
     }
   }
 
-  Future<ReleaseInfo> _fetchViaApi(Dio client) async {
-    final resp = await client.get<Map<String, dynamic>>(apiLatestUrl);
+  Future<ReleaseInfo> _fetchWithRetries(
+    Dio client,
+    CancelToken token,
+    Duration budget,
+  ) async {
+    for (var attempt = 1; ; attempt++) {
+      try {
+        try {
+          return await _fetchViaApi(client, token);
+        } on DioException catch (e) {
+          if (e.response?.statusCode != 403 || !isRateLimited(e)) rethrow;
+          try {
+            return await _fetchViaWeb(client, token);
+          } on _WebFallbackUnavailable {
+            throw e;
+          }
+        }
+      } on FormatException {
+        rethrow;
+      } on _WebFallbackUnavailable {
+        rethrow;
+      } on DioException catch (e) {
+        // 总时限到点的取消：不重试，与 .timeout 路径同口径转超时错，
+        // 避免以“已取消”文案漏到用户提示。
+        if (e.type == DioExceptionType.cancel && token.isCancelled) {
+          throw _timeoutException(budget);
+        }
+        // 限流 403 本身重试无意义（回退链路已定），直接抛。
+        if (e.response?.statusCode == 403 && isRateLimited(e)) rethrow;
+        if (!_isTransientDio(e) || attempt >= fetchMaxAttempts) rethrow;
+        await Future.delayed(_fetchBackoff(attempt));
+      }
+    }
+  }
+
+  static DioException _timeoutException(Duration budget) => DioException(
+    requestOptions: RequestOptions(path: apiLatestUrl),
+    type: DioExceptionType.connectionTimeout,
+    message: '检查更新总时限 ${budget.inSeconds}s 已到',
+  );
+
+  Future<ReleaseInfo> _fetchViaApi(Dio client, CancelToken token) async {
+    final resp = await client.get<Map<String, dynamic>>(
+      apiLatestUrl,
+      cancelToken: token,
+    );
     final data = resp.data;
     if (data == null) throw const FormatException('更新响应为空');
     final release = parseRelease(data);
     if (release.shaUrl != null) {
       final shaResp = await client.get<String>(
         release.shaUrl!,
+        cancelToken: token,
         options: Options(responseType: ResponseType.plain),
       );
       final text = shaResp.data ?? '';
@@ -197,9 +237,10 @@ class UpdateService {
   /// 注意：跳转页本身的网络失败（超时/5xx 等）直接以 DioException 冒泡，
   /// 由 [fetchLatest] 统一判瞬时重试；仅“无有效 tag 跳转”的内容问题抛
   /// [_WebFallbackUnavailable]（调用方转原始限流错，不重试）。
-  Future<ReleaseInfo> _fetchViaWeb(Dio client) async {
+  Future<ReleaseInfo> _fetchViaWeb(Dio client, CancelToken token) async {
     final resp = await client.get<String>(
       webLatestUrl,
+      cancelToken: token,
       options: Options(
         responseType: ResponseType.plain,
         followRedirects: false,
@@ -218,6 +259,7 @@ class UpdateService {
     try {
       final shaResp = await client.get<String>(
         '$base/$shaAssetName',
+        cancelToken: token,
         options: Options(responseType: ResponseType.plain),
       );
       final sum = parseSha256(shaResp.data ?? '', apkAssetName);

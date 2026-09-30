@@ -1,7 +1,9 @@
 /// 自更新交互流：启动静默检查 / 手动检查 / 更新确认 / 下载安装。
 ///
 /// 约定：检查走 GitHub 公开 Release（`releases/latest`），失败一律转提示，
-/// 永不抛到调用方；下载经用户确认后才开始（提示+手动确认）。
+/// 永不抛到调用方；下载经用户确认后才开始（提示+手动确认）。检查中弹层
+/// 可随时关闭，检查转后台、结果到达再提示；检查时限与重试次数受
+/// [UpdateService.fetchTimeout] 总时限约束。
 library;
 
 import 'dart:async';
@@ -21,18 +23,69 @@ import 'theme.dart';
 
 /// 进程内仅做一次启动检查（避免前台恢复/Tab 切换重复弹）。
 bool _startupChecked = false;
-bool _checkActive = false;
 bool _downloadActive = false;
+
+/// 手动/启动检查共享的产出：release 与 error 二选一（error 非空即失败）。
+typedef _CheckOutcome = ({String current, ReleaseInfo? release, Object? error});
+
+/// 正在进行的检查任务。重复触发（用户关掉进度弹层后再点“检查更新”、
+/// 启动检查与手动检查重叠）复用同一次网络请求。[presented] 在结果
+/// 到达后认领（check-then-set 同步原子），保证结果只提示一次；启动
+/// 检查对无新版/失败不认领，同期手动检查仍会给出自己的提示。
+/// [done] 使迟到挂接者不再闪现进度弹层，直接接手或跳过提示。
+class _CheckTask {
+  final Future<_CheckOutcome> result;
+  bool done = false;
+  bool presented = false;
+
+  _CheckTask(this.result) {
+    result.whenComplete(() => done = true);
+  }
+}
+
+_CheckTask? _checkTask;
+
+_CheckTask _startCheckTask(UpdateService service) {
+  final task = _CheckTask(() async {
+    String current = UpdateService.fallbackVersion;
+    ReleaseInfo? release;
+    Object? error;
+    try {
+      current = await service.currentVersion();
+      release = await service.fetchLatest();
+    } catch (e) {
+      error = e;
+    }
+    return (current: current, release: release, error: error);
+  }());
+  return _checkTask = task;
+}
+
+const _checkingRow = Row(
+  mainAxisAlignment: MainAxisAlignment.start,
+  crossAxisAlignment: CrossAxisAlignment.center,
+  children: [
+    CircularProgressIndicator(),
+    SizedBox(width: 16),
+    Text('正在检查更新…'),
+  ],
+);
 
 /// Keep the route identity: shares and other asynchronous flows may push a
 /// different route while the request is running.
 class _UpdateProgressRoute {
   final ModalBottomSheetRoute<void> route;
 
-  _UpdateProgressRoute(BuildContext context, Widget content)
-    : route = ModalBottomSheetRoute<void>(
+  /// [dismissible] 为 false（下载进度）：只拦系统返回，关闭一律走
+  /// [close]，防止误触中断下载；为 true（检查中）：返回手势、点弹层
+  /// 外、下拉均可关闭，任务本身转后台继续。
+  _UpdateProgressRoute(
+    BuildContext context,
+    Widget content, {
+    bool dismissible = false,
+  }) : route = ModalBottomSheetRoute<void>(
         builder: (_) => PopScope(
-          canPop: false,
+          canPop: dismissible,
           // 与“关于”弹层同一样式：panel 底、顶部圆角 28、安全区内边距
           child: SafeArea(
             child: Padding(
@@ -47,8 +100,8 @@ class _UpdateProgressRoute {
           borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
         ),
         isScrollControlled: false,
-        isDismissible: false,
-        enableDrag: false,
+        isDismissible: dismissible,
+        enableDrag: dismissible,
       ) {
     unawaited(Navigator.of(context, rootNavigator: true).push(route));
   }
@@ -56,9 +109,11 @@ class _UpdateProgressRoute {
   bool _closed = false;
 
   /// 栈顶时走 pop() 带动画滑出（与其余底部弹层动效一致；PopScope(canPop:false)
-  /// 只拦系统返回，不拦 Navigator.pop）；被其他路由盖住时 pop 只能关栈顶，
-  /// 保底 removeRoute 立即移除。_closed 保证关闭动作只触发一次；重复调用仍等
+  /// 只拦系统返回，不拦 Navigator.pop）；被其他路由盖住时保底
+  /// removeRoute 立即移除。_closed 保证关闭动作只触发一次；重复调用仍等
   /// completed（退出动画结束、路由释放后才完成），调用方据此安全释放进度流。
+  /// 用户手势关闭（dismissible 弹层）时路由状态已同步越过 popping，
+  /// isActive 为 false，不会重复 pop 底下页面。
   Future<void> close() async {
     if (!_closed) {
       _closed = true;
@@ -135,7 +190,9 @@ Widget _sheetFilledBtn(String label, VoidCallback onTap) => FilledButton(
     );
 
 /// 启动后台检查：开关关闭/非 Android/已是最新/网络失败 → 静默返回；
-/// 仅“有新版”时弹确认框。
+/// 仅“有新版”时弹确认框（全程静默容错，永不抛到 fire-and-forget 的
+/// 调用方）。与手动检查共享同一次在飞请求；无新版/失败不占用展示权，
+/// 同期手动检查仍会提示自己的结果。
 Future<void> maybePromptUpdateAtStartup(
   BuildContext context,
   AppModel model, {
@@ -145,108 +202,97 @@ Future<void> maybePromptUpdateAtStartup(
   _startupChecked = true;
   if (!model.autoUpdateCheck) return;
   if (defaultTargetPlatform != TargetPlatform.android) return;
-  if (_checkActive || _downloadActive || !context.mounted) return;
-  _checkActive = true;
+  if (_checkTask != null || _downloadActive || !context.mounted) return;
+  final task = _startCheckTask(service);
   try {
-    final current = await service.currentVersion();
-    final release = await service.fetchLatest();
-    if (!service.shouldUpdate(current, release)) return;
-    if (!context.mounted || !model.autoUpdateCheck) return;
+    final outcome = await task.result;
+    // 启动检查失败静默：用户可在设置页手动重试
+    final release = outcome.release;
+    if (outcome.error != null || release == null) return;
+    if (!service.shouldUpdate(outcome.current, release)) return;
+    if (!context.mounted || !model.autoUpdateCheck || task.presented) return;
+    task.presented = true;
     await showUpdateDialog(
       context,
-      current: current,
+      current: outcome.current,
       release: release,
       service: service,
     );
   } catch (_) {
-    // 启动检查失败静默：用户可在设置页手动重试
+    // 启动检查全程静默（含确认弹层异常），永不抛到调用方
   } finally {
-    _checkActive = false;
+    if (_checkTask == task) _checkTask = null;
   }
 }
 
-/// 设置页手动检查：有加载态，无新版/失败给 SnackBar，有新版弹确认框。
+/// 设置页手动检查：进度弹层可随时用返回手势、点弹层外或下拉关闭——
+/// 关闭后检查转后台继续，结果到达时再提示（已是最新/失败 SnackBar、
+/// 发现新版弹确认框）。检查进行中重复点击复用同一次请求、只重开进度
+/// 弹层；结果只提示一次（到达后认领，认领者的 context 已失效时让给
+/// 后续挂接者补提示）。
 Future<void> checkUpdateManually(
   BuildContext context, {
   UpdateService service = const UpdateService(),
 }) async {
-  if (_checkActive || _downloadActive || !context.mounted) return;
-  _checkActive = true;
-  try {
-    await _checkUpdateManually(context, service);
-  } finally {
-    _checkActive = false;
-  }
-}
-
-Future<void> _checkUpdateManually(
-  BuildContext context,
-  UpdateService service,
-) async {
+  if (!context.mounted) return;
   if (defaultTargetPlatform != TargetPlatform.android) {
-    if (context.mounted) {
+    _showTip(context, const SnackBar(content: Text('当前平台暂不支持应用内更新')));
+    return;
+  }
+  if (_downloadActive) return;
+  final task = _checkTask ?? _startCheckTask(service);
+  // 已完成的检查（结果尚无人认领/确认框已被别人弹着）直接接手，
+  // 不再闪现进度弹层。
+  final loading = task.done
+      ? null
+      : _UpdateProgressRoute(context, _checkingRow, dismissible: true);
+  final _CheckOutcome outcome;
+  try {
+    outcome = await task.result;
+  } finally {
+    await loading?.close();
+  }
+  if (!context.mounted || task.presented) return;
+  task.presented = true;
+  try {
+    final release = outcome.release;
+    if (outcome.error != null || release == null) {
       _showTip(
         context,
-        const SnackBar(content: Text('当前平台暂不支持应用内更新')),
-      );
-    }
-    return;
-  }
-  final loading = _UpdateProgressRoute(
-    context,
-    // 检查中：进度圈靠左 + 文本，左对齐。
-    const Row(
-      mainAxisAlignment: MainAxisAlignment.start,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        CircularProgressIndicator(),
-        SizedBox(width: 16),
-        Text('正在检查更新…'),
-      ],
-    ),
-  );
-  ReleaseInfo? release;
-  String current = UpdateService.fallbackVersion;
-  Object? error;
-  try {
-    current = await service.currentVersion();
-    release = await service.fetchLatest();
-  } catch (e) {
-    error = e;
-  } finally {
-    await loading.close();
-  }
-  if (!context.mounted) return;
-  if (error != null || release == null) {
-    _showTip(
-      context,
-      SnackBar(
-        content: Text('检查更新失败：${_shortError(error)}，请稍后重试'),
-        duration: const Duration(seconds: 6),
-        // 新版 Flutter 中带 action 的 SnackBar 默认常驻（persist=true），
-        // 必须显式关闭，否则底部黑条不消失。
-        persist: false,
-        action: SnackBarAction(
-          label: '前往下载页',
-          onPressed: () => openReleasePage(UpdateService.releasesPageUrl),
+        SnackBar(
+          content: Text('检查更新失败：${_shortError(outcome.error)}，请稍后重试'),
+          duration: const Duration(seconds: 6),
+          // 新版 Flutter 中带 action 的 SnackBar 默认常驻（persist=true），
+          // 必须显式关闭，否则底部黑条不消失。
+          persist: false,
+          action: SnackBarAction(
+            label: '前往下载页',
+            onPressed: () => openReleasePage(UpdateService.releasesPageUrl),
+          ),
         ),
-      ),
-    );
-    return;
-  }
-  if (!service.shouldUpdate(current, release)) {
-    _showTip(
+      );
+      return;
+    }
+    if (!service.shouldUpdate(outcome.current, release)) {
+      _showTip(
+        context,
+        SnackBar(
+          content: Text(
+            '${UpdateService.appName}已是最新版本（${outcome.current}）',
+          ),
+        ),
+      );
+      return;
+    }
+    await showUpdateDialog(
       context,
-      SnackBar(content: Text('${UpdateService.appName}已是最新版本（$current）')),
+      current: outcome.current,
+      release: release,
+      service: service,
     );
-    return;
+  } finally {
+    if (_checkTask == task) _checkTask = null;
   }
-  await showUpdateDialog(
-    context,
-    current: current,
-    release: release,
-    service: service,
-  );
 }
 
 /// 新版确认框：版本/大小/更新日志 + [稍后再说] [立即更新]。

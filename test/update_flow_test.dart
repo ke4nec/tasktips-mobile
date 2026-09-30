@@ -22,6 +22,17 @@ const release = ReleaseInfo(
   publishedAt: '',
 );
 
+const newerRelease = ReleaseInfo(
+  version: '0.0.6',
+  tagName: 'v0.0.6',
+  name: 'TaskTips',
+  body: '',
+  htmlUrl: UpdateService.releasesPageUrl,
+  apkUrl: 'https://example.com/update.apk',
+  apkFileName: UpdateService.apkAssetName,
+  publishedAt: '',
+);
+
 class FakeUpdateService extends UpdateService {
   Future<ReleaseInfo> Function()? fetch;
   Future<void> Function(String, ProgressCallback, CancelToken?)? download;
@@ -31,7 +42,7 @@ class FakeUpdateService extends UpdateService {
   Future<String> currentVersion() async => '0.0.5';
 
   @override
-  Future<ReleaseInfo> fetchLatest({Dio? dio}) async {
+  Future<ReleaseInfo> fetchLatest({Dio? dio, Duration? timeout}) async {
     checks++;
     return fetch == null ? release : await fetch!();
   }
@@ -196,8 +207,15 @@ void main() {
         service: service,
       );
       await tester.pump();
-      await checkUpdateManually(context, service: service);
+      // 启动检查在飞：手动检查复用同一次请求，只补开进度弹层。
+      var manualDone = false;
+      final manual = checkUpdateManually(
+        context,
+        service: service,
+      ).whenComplete(() => manualDone = true);
+      await tester.pump(const Duration(milliseconds: 300));
       expect(service.checks, 1);
+      expect(find.byType(BottomSheet), findsOneWidget);
       model.autoUpdateCheck = false;
       response.complete(
         const ReleaseInfo(
@@ -211,12 +229,85 @@ void main() {
           publishedAt: '',
         ),
       );
+      // 启动侧开关已关、自己不弹；手动侧作为唯一认领者弹确认框。
+      await pumpUntil(
+        tester,
+        () => find.text('发现 TaskTips 新版本 0.0.6').evaluate().isNotEmpty,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('稍后再说'));
+      await pumpUntil(tester, () => manualDone);
+      await manual;
       await checking;
       await tester.pumpAndSettle();
       expect(find.byType(BottomSheet), findsNothing);
       model.dispose();
     },
   );
+
+  testWidgets('点弹层外关闭检查中弹层：检查转后台，结果到达再提示', (tester) async {
+    final context = await host(tester);
+    final response = Completer<ReleaseInfo>();
+    final service = FakeUpdateService()..fetch = () => response.future;
+    var finished = false;
+    final checking = checkUpdateManually(
+      context,
+      service: service,
+    ).whenComplete(() => finished = true);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(BottomSheet), findsOneWidget);
+    // 点弹层外（顶部 barrier 区域）：弹层滑出，检查不被取消。
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(finished, isFalse);
+    // 结果到达（0.0.5 与本机同版 → 已是最新）：后台流程照常提示一次。
+    response.complete(release);
+    await pumpUntil(tester, () => finished);
+    await checking;
+    await tester.pump();
+    expect(find.textContaining('已是最新版本'), findsOneWidget);
+    expect(service.checks, 1);
+    // SnackBar 4s 计时器到期后再收尾，避免 Timer pending。
+    await tester.pump(const Duration(seconds: 7));
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('返回手势关闭检查中弹层：后台继续并弹出新版确认', (tester) async {
+    final context = await host(tester);
+    final response = Completer<ReleaseInfo>();
+    final service = FakeUpdateService()..fetch = () => response.future;
+    var finished = false;
+    final checking = checkUpdateManually(
+      context,
+      service: service,
+    ).whenComplete(() => finished = true);
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(BottomSheet), findsOneWidget);
+    // 系统返回手势：弹层关闭，检查转后台。
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(finished, isFalse);
+    // 有新版（0.0.6 > 0.0.5）：结果到达时弹确认框。
+    response.complete(newerRelease);
+    await pumpUntil(
+      tester,
+      () => find.text('发现 TaskTips 新版本 0.0.6').evaluate().isNotEmpty,
+    );
+    // 入场动画完成前按钮可能仍在屏幕外，先等弹层停稳再点。
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('稍后再说'));
+    await pumpUntil(tester, () => finished);
+    await checking;
+    await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('Late download completion after cancellation cannot install', (
     tester,

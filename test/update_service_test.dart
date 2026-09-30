@@ -574,6 +574,72 @@ void main() {
     });
   });
 
+  group('检查总时限（弱网不无限等待）', () {
+    /// 无响应挂起：拦截器永不回包，模拟请求发出后一直无响应。
+    test('无响应请求到点按连接超时收口', () async {
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            if (options.uri.toString() != UpdateService.apiLatestUrl) {
+              handler.resolve(
+                Response(requestOptions: options, statusCode: 200),
+              );
+            }
+            // api.github.com 分支：永不回调 handler，请求挂起。
+          },
+        ),
+      );
+      await expectLater(
+        const UpdateService().fetchLatest(
+          dio: dio,
+          timeout: const Duration(milliseconds: 120),
+        ),
+        throwsA(
+          predicate(
+            (e) =>
+                e is DioException &&
+                e.type == DioExceptionType.connectionTimeout,
+          ),
+        ),
+      );
+    });
+
+    /// 退避等待中到点：总时限打断 Future.delayed，同样按超时收口，
+    /// 不再开始下一次重试。
+    test('退避期间到点不再补发重试', () async {
+      var calls = 0;
+      final dio = Dio();
+      dio.interceptors.add(
+        InterceptorsWrapper(
+          onRequest: (options, handler) {
+            calls++;
+            handler.reject(
+              DioException(
+                requestOptions: options,
+                type: DioExceptionType.connectionTimeout,
+              ),
+            );
+          },
+        ),
+      );
+      await expectLater(
+        const UpdateService().fetchLatest(
+          dio: dio,
+          timeout: const Duration(milliseconds: 120),
+        ),
+        throwsA(
+          predicate(
+            (e) =>
+                e is DioException &&
+                e.type == DioExceptionType.connectionTimeout,
+          ),
+        ),
+      );
+      expect(calls, 1);
+    });
+  });
+
   group('下载断点续传（HttpServer 本地）', () {
     late HttpServer server;
     late List<int> content;
