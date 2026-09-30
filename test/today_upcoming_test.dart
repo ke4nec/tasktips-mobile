@@ -8,14 +8,6 @@ import 'package:tasktips/infra/store.dart';
 import 'package:tasktips/ui/app.dart';
 import 'package:tasktips/ui/pages/today_page.dart';
 
-String _addDays(String today, int days) {
-  final t = DateTime.parse(today);
-  final d = DateTime(t.year, t.month, t.day + days);
-  return '${d.year.toString().padLeft(4, '0')}-'
-      '${d.month.toString().padLeft(2, '0')}-'
-      '${d.day.toString().padLeft(2, '0')}';
-}
-
 Future<(Directory, AppModel)> _boot() async {
   final dir = await Directory.systemTemp.createTemp('tt_today');
   final model = AppModel(TodoStore(dir));
@@ -40,15 +32,15 @@ void main() {
       dir = r.$1;
       model = r.$2;
       final today = model!.today;
-      await _mk(model!, '过期任务', _addDays(today, -1));
+      await _mk(model!, '过期任务', addDays(today, -1));
       await _mk(model!, '今日任务', today);
-      await _mk(model!, '明天任务', _addDays(today, 1));
-      await _mk(model!, '三天任务', _addDays(today, 3));
-      await _mk(model!, '七天任务', _addDays(today, 7));
-      await _mk(model!, '三十天任务', _addDays(today, 30));
+      await _mk(model!, '明天任务', addDays(today, 1));
+      await _mk(model!, '三天任务', addDays(today, 3));
+      await _mk(model!, '七天任务', addDays(today, 7));
+      await _mk(model!, '三十天任务', addDays(today, 30));
       // 7天桶放5条验证折叠
       for (var i = 0; i < 5; i++) {
-        await _mk(model!, '七天多条$i', _addDays(today, 6));
+        await _mk(model!, '七天多条$i', addDays(today, 6));
       }
     });
     addTearDown(() => dir!.delete(recursive: true));
@@ -85,7 +77,7 @@ void main() {
       final r = await _boot();
       dir = r.$1;
       model = r.$2;
-      await _mk(model!, '明天任务', _addDays(model!.today, 1));
+      await _mk(model!, '明天任务', addDays(model!.today, 1));
     });
     addTearDown(() => dir!.delete(recursive: true));
 
@@ -95,6 +87,37 @@ void main() {
     expect(find.text('今天没有到期任务'), findsOneWidget);
     expect(find.text('明天'), findsWidgets);
     expect(find.text('明天任务'), findsOneWidget);
+  });
+
+  testWidgets('折叠未来分组的全选只选择当前显示的三条', (tester) async {
+    Directory? dir;
+    AppModel? model;
+    await tester.runAsync(() async {
+      final r = await _boot();
+      dir = r.$1;
+      model = r.$2;
+      final today = model!.today;
+      for (var i = 0; i < 6; i++) {
+        await _mk(model!, '折叠任务$i', addDays(today, 6));
+      }
+    });
+    addTearDown(() => dir!.delete(recursive: true));
+
+    tester.view.physicalSize = const Size(800, 1800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    await tester.pumpWidget(MaterialApp(home: TodayPage(model: model!)));
+    await tester.pump();
+
+    // 默认按更新时间倒序，最后创建的条目位于折叠组前三条中。
+    await tester.longPress(find.text('折叠任务5'));
+    await tester.pumpAndSettle();
+    expect(find.text('已选 1 项'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, '全选'));
+    await tester.pump();
+    expect(find.text('已选 3 项'), findsOneWidget);
   });
 
   testWidgets('底部今日 Tab 有数字气泡，无任务时隐藏', (tester) async {
@@ -107,18 +130,21 @@ void main() {
       // 关掉启动更新检查：避免网络定时器残留导致测试 teardown 断言失败
       await model!.setAutoUpdateCheck(false);
       await _mk(model!, '今日任务A', model!.today);
-      await _mk(model!, '过期任务B', _addDays(model!.today, -2));
-      await _mk(model!, '未来任务不计数', _addDays(model!.today, 5));
+      await _mk(model!, '过期任务B', addDays(model!.today, -2));
+      await _mk(model!, '未来任务不计数', addDays(model!.today, 5));
     });
     addTearDown(() => dir!.delete(recursive: true));
 
     await tester.pumpWidget(TaskTipsApp(model: model!));
     await tester.pump();
 
-    // 今日视图总数=2（过期+今天），未来任务不进气泡
+    // 今日视图总数=2（过期+今天），未来任务不进气泡：直接断言 Badge 的 label
     final badges = tester.widgetList<Badge>(find.byType(Badge));
-    expect(badges.where((b) => b.isLabelVisible), isNotEmpty);
-    expect(find.text('2'), findsWidgets);
+    final visible = badges.where((b) => b.isLabelVisible).toList();
+    expect(visible, isNotEmpty);
+    for (final b in visible) {
+      expect((b.label as Text).data, '2');
+    }
 
     // 完成后气泡消失
     await tester.runAsync(() async {

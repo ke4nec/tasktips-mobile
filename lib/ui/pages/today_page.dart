@@ -19,16 +19,6 @@ class TodayPage extends StatefulWidget {
   State<TodayPage> createState() => _TodayPageState();
 }
 
-/// YYYY-MM-DD 加 N 天（月份进位由 DateTime 构造处理；解析失败回退原串）。
-String _addDays(String today, int days) {
-  final t = DateTime.tryParse(today);
-  if (t == null) return today;
-  final d = DateTime(t.year, t.month, t.day + days);
-  return '${d.year.toString().padLeft(4, '0')}-'
-      '${d.month.toString().padLeft(2, '0')}-'
-      '${d.day.toString().padLeft(2, '0')}';
-}
-
 class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
   @override
   AppModel get selectionModel => widget.model;
@@ -59,10 +49,10 @@ class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
         // 未来分组只跑一次 upcoming 查询再按日期切桶，保持默认排序的相对顺序。
         // 区间互斥：明天 == +1；3天内 == +2~+3；7天内 == +4~+7；30天内 == +8~+30。
         final upcoming = model.query(TodoQuery(view: TodoView.upcoming));
-        final tomorrowStr = _addDays(todayStr, 1);
-        final d3End = _addDays(todayStr, 3);
-        final d7End = _addDays(todayStr, 7);
-        final d30End = _addDays(todayStr, 30);
+        final tomorrowStr = addDays(todayStr, 1);
+        final d3End = addDays(todayStr, 3);
+        final d7End = addDays(todayStr, 7);
+        final d30End = addDays(todayStr, 30);
         final tomorrow = <Todo>[];
         final next3 = <Todo>[];
         final next7 = <Todo>[];
@@ -80,14 +70,13 @@ class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
           }
         }
         final upcomingCount = upcoming.length;
-        final allVisible = [
-          ...overdue,
-          ...dueToday,
-          ...tomorrow,
-          ...next3,
-          ...next7,
-          ...next30,
+        final visibleUpcoming = [
+          ..._visibleUpcoming('tomorrow', tomorrow),
+          ..._visibleUpcoming('d3', next3),
+          ..._visibleUpcoming('d7', next7),
+          ..._visibleUpcoming('d30', next30),
         ];
+        final selectionVisible = [...overdue, ...dueToday, ...visibleUpcoming];
         final a = appColors(context, Theme.of(context).brightness);
         final now = DateTime.now();
         const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
@@ -113,7 +102,7 @@ class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
             ],
           ),
           bottomNavigationBar:
-              selecting ? selectionBar(allVisible) : null,
+              selecting ? selectionBar(selectionVisible) : null,
           body: CustomScrollView(
             slivers: [
               SliverPadding(
@@ -265,12 +254,15 @@ class _TodayPageState extends State<TodayPage> with TodoSelectionMixin {
   }
 
   /// 未来分组段：默认只显示前 3 条，超长时标题行右侧给展开/收起（48dp 触控）。
+  List<Todo> _visibleUpcoming(String key, List<Todo> items) =>
+      _expanded.contains(key) ? items : items.take(3).toList();
+
   List<Widget> _upcomingSection(
       BuildContext context, String key, String title, List<Todo> items) {
     if (items.isEmpty) return [];
     final a = appColors(context, Theme.of(context).brightness);
     final expanded = _expanded.contains(key);
-    final visible = expanded ? items : items.take(3).toList();
+    final visible = _visibleUpcoming(key, items);
     return [
       SliverPadding(
         padding: const EdgeInsets.symmetric(horizontal: 16),

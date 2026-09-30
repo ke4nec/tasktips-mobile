@@ -12,10 +12,7 @@ import 'theme.dart';
 String _tomorrowOf(String today) {
   if (_fdCacheKey != today) {
     _fdCacheKey = today;
-    final t = DateTime.tryParse(today);
-    _fdTomorrow = t == null
-        ? null
-        : DateTime(t.year, t.month, t.day + 1).toIso8601String().substring(0, 10);
+    _fdTomorrow = addDays(today, 1);
   }
   return _fdTomorrow ?? '';
 }

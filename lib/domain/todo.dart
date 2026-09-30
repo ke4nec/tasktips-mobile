@@ -25,6 +25,17 @@ String todayLocal() {
       '${n.day.toString().padLeft(2, '0')}';
 }
 
+/// 无时区日期 YYYY-MM-DD 加 N 天（跨月/年进位由 DateTime 构造处理；
+/// 解析失败回退原串，调用方按未命中区间处理）。
+String addDays(String date, int days) {
+  final t = DateTime.tryParse(date);
+  if (t == null) return date;
+  final d = DateTime(t.year, t.month, t.day + days);
+  return '${d.year.toString().padLeft(4, '0')}-'
+      '${d.month.toString().padLeft(2, '0')}-'
+      '${d.day.toString().padLeft(2, '0')}';
+}
+
 enum TodoStatus { open, completed }
 
 /// 优先级 0/1/2/3：无、低、中、高。
