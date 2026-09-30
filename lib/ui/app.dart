@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app/app_model.dart';
+import '../domain/todo.dart';
 import 'pages/detail_page.dart';
 import 'pages/folder_page.dart';
 import 'pages/inbox_page.dart';
@@ -162,15 +163,45 @@ class _HomeShellState extends State<HomeShell> with WidgetsBindingObserver {
               child: const Icon(Icons.add),
             )
           : null,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.calendar_today_outlined), selectedIcon: Icon(Icons.calendar_today), label: '今日'),
-          NavigationDestination(icon: Icon(Icons.checklist), selectedIcon: Icon(Icons.checklist_rounded), label: '列表'),
-          NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: '分类'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: '设置'),
-        ],
+      bottomNavigationBar: AnimatedBuilder(
+        animation: model,
+        builder: (context, _) {
+          // 今日气泡 = 今日视图总数（已过期全部 + 今天到期），0 时不显示
+          final t = model.today;
+          var todayCount = 0;
+          for (final todo in model.todos) {
+            if (todo.status == TodoStatus.open &&
+                !todo.isDeleted &&
+                todo.dueDate != null &&
+                todo.dueDate!.compareTo(t) <= 0) {
+              todayCount++;
+            }
+          }
+          final label =
+              todayCount > 99 ? '99+' : '$todayCount';
+          return NavigationBar(
+            selectedIndex: _tab,
+            onDestinationSelected: (i) => setState(() => _tab = i),
+            destinations: [
+              NavigationDestination(
+                icon: Badge(
+                  isLabelVisible: todayCount > 0,
+                  label: Text(label),
+                  child: const Icon(Icons.calendar_today_outlined),
+                ),
+                selectedIcon: Badge(
+                  isLabelVisible: todayCount > 0,
+                  label: Text(label),
+                  child: const Icon(Icons.calendar_today),
+                ),
+                label: '今日',
+              ),
+              const NavigationDestination(icon: Icon(Icons.checklist), selectedIcon: Icon(Icons.checklist_rounded), label: '列表'),
+              const NavigationDestination(icon: Icon(Icons.folder_outlined), selectedIcon: Icon(Icons.folder), label: '分类'),
+              const NavigationDestination(icon: Icon(Icons.settings_outlined), selectedIcon: Icon(Icons.settings), label: '设置'),
+            ],
+          );
+        },
       ),
     );
   }
