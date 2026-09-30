@@ -381,6 +381,47 @@ void main() {
       expect(engine.dioMessage(_dioError(403), 'x'), '没有权限，设备可能已被撤销');
     });
 
+    test('登录日志错误码：有响应沿用 HTTP_状态码，无响应细分原因', () async {
+      final (_, engine, _) = await _setup();
+      DioException noResponse(DioExceptionType t, [Object? err]) =>
+          DioException(
+              requestOptions: RequestOptions(path: '/x'), type: t, error: err);
+      // 有响应：保持旧口径
+      expect(engine.loginErrorCode(_dioError(500)), 'HTTP_500');
+      // 类型直判
+      expect(engine.loginErrorCode(noResponse(DioExceptionType.badCertificate)),
+          'TLS_CERT');
+      expect(
+          engine.loginErrorCode(
+              noResponse(DioExceptionType.connectionTimeout)),
+          'CONN_TIMEOUT');
+      expect(engine.loginErrorCode(noResponse(DioExceptionType.cancel)),
+          'CANCELLED');
+      // 底层异常细分：拒绝 / DNS / 不可达 / 证书（握手透出）/ 普通握手
+      expect(
+          engine.loginErrorCode(noResponse(DioExceptionType.connectionError,
+              const SocketException('Connection refused', osError: OSError('', 111)))),
+          'CONN_REFUSED');
+      expect(
+          engine.loginErrorCode(noResponse(DioExceptionType.unknown,
+              const SocketException('Failed host lookup'))),
+          'DNS_FAIL');
+      expect(
+          engine.loginErrorCode(noResponse(DioExceptionType.connectionError,
+              const SocketException('Network is unreachable'))),
+          'NET_UNREACH');
+      expect(
+          engine.loginErrorCode(noResponse(DioExceptionType.connectionError,
+              const HandshakeException('Handshake error in client (CERTIFICATE_VERIFY_FAILED)'))),
+          'TLS_CERT');
+      expect(
+          engine.loginErrorCode(noResponse(DioExceptionType.connectionError,
+              const HandshakeException('Handshake error in client'))),
+          'TLS_HANDSHAKE');
+      expect(engine.loginErrorCode(noResponse(DioExceptionType.unknown)),
+          'NETWORK');
+    });
+
     test('handleTerminalAuthFailure：清凭据+断开+暂停标记', () async {
       final (_, engine, _) = await _setup();
       final storage = engine.session;

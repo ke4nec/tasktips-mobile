@@ -278,7 +278,7 @@ class SyncEngine extends ChangeNotifier {
       notifyListeners();
       return null;
     } on DioException catch (e) {
-      _log('login', 1, 'error', 'HTTP_${e.response?.statusCode ?? 'network'}');
+      _log('login', 1, 'error', _loginErrorCode(e));
       return _dioMessage(e, '连接失败');
     }
   }
@@ -1648,6 +1648,61 @@ class SyncEngine extends ChangeNotifier {
 
   @visibleForTesting
   String? errorCodeOf(DioException e) => _errorCodeOf(e);
+
+  /// 登录失败记入同步日志的错误码：有服务端响应时沿用 `HTTP_<status>`；
+  /// 无响应时按 Dio 错误类型与底层异常细分（证书/DNS/拒绝/超时/握手），
+  /// 否则裸 IP 自签证书、端口未监听、DNS 失败等在日志里清一色
+  /// `HTTP_network`，无法定位。只记固定短码，不含任何原文，
+  /// 正文/密码/token 绝不进日志。
+  static String _loginErrorCode(DioException e) {
+    final status = e.response?.statusCode;
+    if (status != null) return 'HTTP_$status';
+    switch (e.type) {
+      case DioExceptionType.badCertificate:
+        return 'TLS_CERT';
+      case DioExceptionType.connectionTimeout:
+        return 'CONN_TIMEOUT';
+      case DioExceptionType.sendTimeout:
+        return 'SEND_TIMEOUT';
+      case DioExceptionType.receiveTimeout:
+        return 'RECV_TIMEOUT';
+      case DioExceptionType.transformTimeout:
+        return 'TRANSFORM_TIMEOUT';
+      case DioExceptionType.cancel:
+        return 'CANCELLED';
+      case DioExceptionType.badResponse:
+        return 'BAD_RESPONSE';
+      case DioExceptionType.connectionError:
+      case DioExceptionType.unknown:
+        return _networkCauseCode(e.error);
+    }
+  }
+
+  static String _networkCauseCode(Object? err) {
+    final s = err.toString().toLowerCase();
+    // 证书校验失败常以 HandshakeException 透出，先按关键字识别
+    if (s.contains('certificate') || s.contains('cert')) return 'TLS_CERT';
+    if (err is SocketException) {
+      if (err.osError?.errorCode == 111 || s.contains('connection refused')) {
+        return 'CONN_REFUSED';
+      }
+      if (s.contains('failed host lookup') ||
+          s.contains('no address associated') ||
+          s.contains('nodename nor servname')) {
+        return 'DNS_FAIL';
+      }
+      if (s.contains('network is unreachable')) return 'NET_UNREACH';
+      if (s.contains('timed out')) return 'CONN_TIMEOUT';
+      return 'SOCKET_ERR';
+    }
+    if (err is HandshakeException || s.contains('handshake')) {
+      return 'TLS_HANDSHAKE';
+    }
+    return 'NETWORK';
+  }
+
+  @visibleForTesting
+  String loginErrorCode(DioException e) => _loginErrorCode(e);
 
   /// 单条变更应用的测试缝（墓碑合并/复活守卫等回归用）。
   @visibleForTesting
